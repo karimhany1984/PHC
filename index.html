@@ -1141,7 +1141,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                 <h3>أقسام النموذج</h3>
                 <div class="sidebar-total">
                     <span class="score-big" id="sbTotalScore">0</span>
-                    <span class="score-max">/ 1520 نقطة</span>
+                    <span class="score-max" id="sbMaxScore">/ — نقطة</span>
                     <span class="pct-badge" id="sbTotalPct">0%</span>
                 </div>
             </div>
@@ -1620,23 +1620,24 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
 "oncology__20": 501,
 "oncology__21": 502,
 "oncology__22": 503,
-"oncology__23": 505,
-"oncology__24": 506,
-"oncology__25": 507,
-"oncology__26": 508,
-"oncology__27": 509,
-"oncology__28": 510,
-"oncology__29": 511,
-"oncology__30": 512,
-"oncology__31": 513,
-"oncology__32": 514,
-"oncology__33": 515,
-"oncology__34": 516,
-"oncology__35": 517,
-"oncology__36": 518,
-"oncology__37": 519,
-"oncology__38": 520,
-"oncology__39": 521,
+"oncology__23": 504,
+"oncology__24": 505,
+"oncology__25": 506,
+"oncology__26": 507,
+"oncology__27": 508,
+"oncology__28": 509,
+"oncology__29": 510,
+"oncology__30": 511,
+"oncology__31": 512,
+"oncology__32": 513,
+"oncology__33": 514,
+"oncology__34": 515,
+"oncology__35": 516,
+"oncology__36": 517,
+"oncology__37": 518,
+"oncology__38": 519,
+"oncology__39": 520,
+"oncology__40": 521,
 "telehealth__0": 525,
 "telehealth__1": 526,
 "telehealth__2": 527,
@@ -3534,7 +3535,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
     "key": "oncology",
     "title": "قسم الأورام",
     "icon": "🎗️",
-    "max": 80,
+    "max": 82,
     "subsections": [
       {
         "title": "قسم الأورام",
@@ -3607,6 +3608,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
           },
           {
             "text": "توجد وسائل حماية لمنع تعرض العاملين والمرضى غير المعالجين للإشعاع"
+          },
+			{ "text": "يتم مراقبة المرضى للكشف عن الآثار الجانبية للعلاج الإشعاعي"
           },
           {
             "text": "يتم توفير خدمات الدعم النفسي للمرضى أثناء العلاج"
@@ -5314,8 +5317,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             const sec = FORM_DATA.find(s => s.key === key);
             if (!sec) return;
 
-            const { earned } = getSectionScore(key);
-            const pct = sec.max > 0 ? Math.round(earned / sec.max * 100) : 0;
+            const { earned, effectiveMax: secEffMax } = getSectionScore(key);
+            const pct = secEffMax > 0 ? Math.round(earned / secEffMax * 100) : 0;
             const pctClass = pct >= 80 ? 'pct-high' : pct >= 50 ? 'pct-mid' : pct > 0 ? 'pct-low' : 'pct-zero';
             const pctColor = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : pct > 0 ? 'var(--red)' : 'var(--text-dim)';
 
@@ -5402,13 +5405,13 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             document.getElementById('mnHome')?.classList.remove('active');
 
             let grandEarned = 0, grandMax = 0;
-            FORM_DATA.forEach(s => { const { earned } = getSectionScore(s.key); grandEarned += earned; grandMax += s.max; });
+            FORM_DATA.forEach(s => { const { earned, effectiveMax } = getSectionScore(s.key); grandEarned += earned; grandMax += effectiveMax; });
             const grandPct = grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0;
             const pctColor = grandPct >= 80 ? '#27ae60' : grandPct >= 60 ? '#e8a020' : grandPct >= 40 ? '#d35400' : '#c0392b';
 
             let cardsHtml = FORM_DATA.map(sec => {
-                const { earned } = getSectionScore(sec.key);
-                const pct = sec.max > 0 ? Math.round(earned / sec.max * 100) : 0;
+                const { earned, effectiveMax: secMax } = getSectionScore(sec.key);
+                const pct = secMax > 0 ? Math.round(earned / secMax * 100) : 0;
                 const fillClass = pct >= 80 ? 'fill-h' : pct >= 50 ? 'fill-m' : pct > 0 ? 'fill-l' : '';
                 const fillColor = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : pct > 0 ? 'var(--red)' : 'var(--border)';
                 const pctColor2 = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : pct > 0 ? 'var(--red)' : 'var(--text-dim)';
@@ -5417,7 +5420,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
           <div class="sum-bar"><div class="sum-bar-fill" style="width:${pct}%;background:${fillColor}"></div></div>
           <div class="sum-scores">
             <span class="sum-earned">${earned}</span>
-            <span class="sum-max">من ${sec.max}</span>
+            <span class="sum-max">من ${secMax}</span>
             <span class="sum-pct" style="color:${pctColor2}">${pct}%</span>
           </div>
         </div>`;
@@ -5519,22 +5522,26 @@ function setNote(ik, val) {
 
         function getSectionScore(key) {
             const sec = FORM_DATA.find(s => s.key === key);
-            if (!sec) return { earned: 0 };
-            let earned = 0, idx = 0;
+            if (!sec) return { earned: 0, effectiveMax: 0 };
+            let earned = 0, effectiveMax = 0, idx = 0;
             sec.subsections.forEach(sub => sub.items.forEach(() => {
                 const sc = scores[`${key}__${idx}`];
-                if (sc === 1) earned += 1;
-                else if (sc === 2) earned += 2;
+                // Only numeric answers (0/1/2) count toward the max — matching Excel COUNT() logic
+                if (sc === 0 || sc === 1 || sc === 2) {
+                    effectiveMax += 2;
+                    if (sc === 1) earned += 1;
+                    else if (sc === 2) earned += 2;
+                }
                 idx++;
             }));
-            return { earned };
+            return { earned, effectiveMax };
         }
 
         function updateSectionScoreDisplay(key) {
             const sec = FORM_DATA.find(s => s.key === key);
             if (!sec) return;
-            const { earned } = getSectionScore(key);
-            const pct = sec.max > 0 ? Math.round(earned / sec.max * 100) : 0;
+            const { earned, effectiveMax: secEffMax } = getSectionScore(key);
+            const pct = secEffMax > 0 ? Math.round(earned / secEffMax * 100) : 0;
             const el = document.getElementById(`sec-score-${key}`);
             const pctEl = document.getElementById(`sec-pct-${key}`);
             if (el) el.textContent = earned;
@@ -5564,15 +5571,18 @@ function setNote(ik, val) {
             let grand = 0; FORM_DATA.forEach(s => { const { earned } = getSectionScore(s.key); grand += earned; });
             const sb = document.getElementById('sbTotalScore');
             const sbp = document.getElementById('sbTotalPct');
+            let grandMaxDyn = 0; FORM_DATA.forEach(s => { const { effectiveMax } = getSectionScore(s.key); grandMaxDyn += effectiveMax; });
             if (sb) sb.textContent = grand;
-            if (sbp) sbp.textContent = `${Math.round(grand / 1520 * 100)}%`;
+            if (sbp) sbp.textContent = grandMaxDyn > 0 ? `${Math.round(grand / grandMaxDyn * 100)}%` : '0%';
+            const sbMax = document.getElementById('sbMaxScore');
+            if (sbMax) sbMax.textContent = grandMaxDyn > 0 ? `/ ${grandMaxDyn} نقطة` : '/ — نقطة';
         }
         function updateMetaResult() {
             let grandEarned = 0, grandMax = 0;
             FORM_DATA.forEach(sec => {
-                const { earned } = getSectionScore(sec.key);
+                const { earned, effectiveMax } = getSectionScore(sec.key);
                 grandEarned += earned;
-                grandMax += sec.max;
+                grandMax += effectiveMax;
             });
             const pct = grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0;
             meta.result = `${pct}%`;
