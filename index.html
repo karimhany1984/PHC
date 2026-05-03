@@ -6594,6 +6594,75 @@ files['xl/workbook.xml'] = new TextEncoder().encode(workbook);
     window.addEventListener('appinstalled', () => {
         installBanner.style.display = 'none';
     });
+
+    // ═══════════════════════════════════════════════
+    // SHARE TARGET RECEIVER
+    // Handles Excel files shared from WhatsApp / system share sheet
+    // ═══════════════════════════════════════════════
+
+    // Convert base64 back to File object and feed into existing Excel importer
+    function loadSharedExcelFile(name, base64) {
+        try {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            });
+            const file = new File([blob], name || 'shared.xlsx', { type: blob.type });
+
+            // Show a toast so the inspector knows the file arrived
+            if (typeof showToast === 'function') showToast('📂 جاري تحميل الملف المشارك: ' + (name || ''));
+
+            // Reuse the existing handleFileUpload function — simulate a file input event
+            const fakeEvent = { target: { files: [file] } };
+            if (typeof handleFileUpload === 'function') {
+                handleFileUpload(fakeEvent);
+            }
+        } catch (err) {
+            console.error('[Share] Failed to load shared file:', err);
+            if (typeof showToast === 'function') showToast('خطأ في تحميل الملف المشارك');
+        }
+    }
+
+    // 1. Listen for live postMessage from SW (app is already open in foreground)
+    navigator.serviceWorker && navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data && event.data.type === 'SHARED_FILE') {
+            loadSharedExcelFile(event.data.name, event.data.data);
+        }
+    });
+
+    // 2. On startup: check if SW stored a shared file while the app was closed
+    async function checkPendingSharedFile() {
+        if (!('caches' in window)) return;
+        try {
+            const cache = await caches.open('hospital-inspector-v1');
+            const response = await cache.match('./shared-file');
+            if (!response) return;
+            const payload = await response.json();
+            if (!payload || !payload.data) return;
+
+            // Only process if fresh (within last 5 minutes)
+            if (Date.now() - payload.timestamp > 5 * 60 * 1000) {
+                await cache.delete('./shared-file');
+                return;
+            }
+
+            // Clear it so it doesn't reload on next open
+            await cache.delete('./shared-file');
+
+            // Small delay to let the app UI fully initialise
+            setTimeout(() => loadSharedExcelFile(payload.name, payload.data), 600);
+        } catch (err) {
+            console.error('[Share] checkPendingSharedFile error:', err);
+        }
+    }
+
+    // Run the check once the SW is ready
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then(() => checkPendingSharedFile());
+    }
+
 	function scrollToNextUnanswered() {
     const allRows = document.querySelectorAll('.item-row');
     let found = false;
