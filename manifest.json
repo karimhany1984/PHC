@@ -1,25 +1,34 @@
 {
-  "name": "نموذج متابعة المستشفيات",
-  "short_name": "متابعة المديريات",
-  "description": "إدارة متابعة المديريات - مديرية الشئون الصحية بالاسكندرية",
-  "start_url": "https://karimhany1984.github.io/hospital-form/index.html",
-  "scope": "https://karimhany1984.github.io/hospital-form/",
+  "name": "تقييم المستشفيات",
+  "short_name": "تقييم",
+  "description": "تطبيق تفتيش وتقييم المستشفيات",
+  "start_url": "./index.html",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#1a6faf",
+  "background_color": "#1a3a5c",
   "theme_color": "#1a6faf",
   "lang": "ar",
   "dir": "rtl",
   "icons": [
-    {
-      "src": "https://karimhany1984.github.io/hospital-form/icon.png",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "https://karimhany1984.github.io/hospital-form/icon.png",
-      "sizes": "512x512",
-      "type": "image/png"
+    { "src": "Icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "Icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "./share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "file",
+          "accept": [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+            ".xlsx",
+            ".xls"
+          ]
+        }
+      ]
     }
-  ]
+  }
 }
