@@ -16,6 +16,20 @@
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js').then(reg => {
                 reg.update();
+                
+                // ── Handle Service Worker updates ──
+                let refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    if (!refreshing) {
+                        refreshing = true;
+                        // Use a simple alert as fallback if showToast isn't defined yet
+                        if (typeof showToast === 'function') {
+                            showToast('🔄 تحديث جديد متاح — جاري التحديث...');
+                        }
+                        setTimeout(() => window.location.reload(), 1000);
+                    }
+                });
+                
             }).catch(() => { /* sw.js not available in this environment — safe to ignore */ });
         });
     }
