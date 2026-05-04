@@ -15,22 +15,34 @@
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js').then(reg => {
-                reg.update();
+                console.log('Service Worker registered successfully');
                 
-                // ── Handle Service Worker updates ──
+                // Check for updates every 60 seconds
+                setInterval(() => {
+                    reg.update();
+                }, 60000);
+                
+                // Handle controller change (new SW takes over)
                 let refreshing = false;
                 navigator.serviceWorker.addEventListener('controllerchange', () => {
                     if (!refreshing) {
                         refreshing = true;
-                        // Use a simple alert as fallback if showToast isn't defined yet
-                        if (typeof showToast === 'function') {
-                            showToast('🔄 تحديث جديد متاح — جاري التحديث...');
-                        }
-                        setTimeout(() => window.location.reload(), 1000);
+                        console.log('New Service Worker activated, reloading...');
+                        // Use alert which always works
+                        alert('🔄 تم تحديث التطبيق! سيتم إعادة التحميل الآن.\n🔄 App updated! Reloading now.');
+                        window.location.reload();
                     }
                 });
                 
-            }).catch(() => { /* sw.js not available in this environment — safe to ignore */ });
+                // Check if there's a waiting service worker
+                if (reg.waiting) {
+                    console.log('Found waiting service worker');
+                    reg.waiting.postMessage({type: 'SKIP_WAITING'});
+                }
+                
+            }).catch(err => {
+                console.log('Service Worker registration failed:', err);
+            });
         });
     }
 </script>
