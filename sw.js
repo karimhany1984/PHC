@@ -118,3 +118,9 @@ function bufferToBase64(buffer) {
   }
   return btoa(binary);
 }
+// Listen for messages from clients to skip waiting
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
+});
