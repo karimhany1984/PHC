@@ -2,7 +2,7 @@
 //  Service Worker — Offline Cache + Share Target
 // ═══════════════════════════════════════════════════
 
-const CACHE_NAME = 'hospital-inspector-v1';
+const CACHE_NAME = 'hospital-inspector-v2';
 
 // All files that must be cached for offline use
 const PRECACHE_URLS = [
