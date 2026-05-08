@@ -2,14 +2,15 @@
 //  Service Worker — Offline Cache + Share Target
 // ═══════════════════════════════════════════════════
 
-const CACHE_NAME = 'hospital-inspector-v6';
+const CACHE_NAME = 'hospital-inspector-v7';
 
 // All files that must be cached for offline use
 const PRECACHE_URLS = [
   './',
   './index.html',
     './Icon.png',
-  './manifest.json'
+  './manifest.json',
+   './template.xlsx'
 ];
 
 // ── Install: pre-cache the app shell ───────────────
