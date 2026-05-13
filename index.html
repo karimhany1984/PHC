@@ -4175,13 +4175,23 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // ═══════════════════════════════════════
         // INIT
         // ═══════════════════════════════════════
-        window.addEventListener('DOMContentLoaded', () => {
-            loadFromLocal();
-            buildSidebarNav();
-            showHome();
-            updateProgress();
-        });
-
+       window.addEventListener('DOMContentLoaded', () => {
+    try {
+        console.log('DOM ready, FORM_DATA length:', FORM_DATA?.length);
+        if (!FORM_DATA || FORM_DATA.length === 0) {
+            console.error('FORM_DATA is empty!');
+            document.getElementById('mainContent').innerHTML = '<div class="error">خطأ في تحميل البيانات</div>';
+            return;
+        }
+        loadFromLocal();
+        buildSidebarNav();
+        showHome();
+        updateProgress();
+    } catch(e) {
+        console.error('Initialization error:', e);
+        document.getElementById('mainContent').innerHTML = '<div class="error">حدث خطأ: ' + e.message + '</div>';
+    }
+});
         // ═══════════════════════════════════════
         // SIDEBAR NAV
         // ═══════════════════════════════════════
@@ -4235,6 +4245,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // HOME SCREEN
         // ═══════════════════════════════════════
         function showHome() {
+			try {
             currentSection = 'home';
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             document.querySelector('.nav-item')?.classList.add('active');
@@ -4312,6 +4323,10 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
           <div class="nav-grid-title">⚡ انتقل مباشرة إلى أي قسم</div>
           <div class="nav-grid">${navCardsHtml}</div>
         </div>`;
+			   } catch(e) {
+        console.error('showHome error:', e);
+        document.getElementById('mainContent').innerHTML = '<div class="error">فشل عرض الصفحة الرئيسية: ' + e.message + '</div>';
+    }
         }
 
         // ═══════════════════════════════════════
