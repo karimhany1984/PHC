@@ -4333,38 +4333,61 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // ═══════════════════════════════════════
         // TEMPLATE LOADER - FETCH EXTERNAL FILES
         // ═══════════════════════════════════════
-        async function loadExcelTemplate() {
-            showToast('جاري تحميل قالب التصدير...');
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+        // ── Template cache: loaded once at startup, reused on every export ─────
+        let _cachedExcelTemplate = null;
+        let _cachedWordTemplate  = null;
+
+        async function _fetchWithTimeout(url, ms = 15000) {
+            const ctrl = new AbortController();
+            const tid  = setTimeout(() => ctrl.abort(), ms);
             try {
-                const response = await fetch('./template.xlsx', { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (!response.ok) {
-                    throw new Error(`تعذّر تحميل القالب: ${response.status} ${response.statusText}`);
-                }
-                return new Uint8Array(await response.arrayBuffer());
-            } catch (e) {
-                clearTimeout(timeoutId);
-                console.error('Excel template load error:', e);
-                if (e.name === 'AbortError') {
-                    showToast('انتهت مهلة تحميل القالب — تأكد من أن ملف template.xlsx موجود على الخادم');
-                } else {
-                    showToast('خطأ في تحميل القالب: ' + e.message);
-                }
+                const r = await fetch(url, { signal: ctrl.signal });
+                clearTimeout(tid);
+                if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + url);
+                return new Uint8Array(await r.arrayBuffer());
+            } catch(e) { clearTimeout(tid); throw e; }
+        }
+
+        async function preloadTemplates() {
+            const results = await Promise.allSettled([
+                _fetchWithTimeout('./template.xlsx'),
+                _fetchWithTimeout('./template.docx')
+            ]);
+            if (results[0].status === 'fulfilled') {
+                _cachedExcelTemplate = results[0].value;
+                console.log('[Templates] ✓ template.xlsx ready (' + _cachedExcelTemplate.length + ' bytes)');
+            } else {
+                console.warn('[Templates] ✗ template.xlsx failed:', results[0].reason);
+            }
+            if (results[1].status === 'fulfilled') {
+                _cachedWordTemplate = results[1].value;
+                console.log('[Templates] ✓ template.docx ready (' + _cachedWordTemplate.length + ' bytes)');
+            } else {
+                console.warn('[Templates] ✗ template.docx failed:', results[1].reason);
+            }
+        }
+
+        async function loadExcelTemplate() {
+            if (_cachedExcelTemplate) return _cachedExcelTemplate;
+            showToast('جاري تحميل قالب Excel...');
+            try {
+                _cachedExcelTemplate = await _fetchWithTimeout('./template.xlsx');
+                return _cachedExcelTemplate;
+            } catch(e) {
+                showToast(e.name === 'AbortError'
+                    ? 'انتهت مهلة تحميل القالب — تأكد من وجود template.xlsx على الخادم'
+                    : 'خطأ في تحميل قالب Excel: ' + e.message);
                 throw e;
             }
         }
 
         async function loadWordTemplate() {
+            if (_cachedWordTemplate) return _cachedWordTemplate;
+            showToast('جاري تحميل قالب Word...');
             try {
-                const response = await fetch('./template.docx');
-                if (!response.ok) {
-                    throw new Error(`تعذّر تحميل قالب Word: ${response.status}`);
-                }
-                return new Uint8Array(await response.arrayBuffer());
-            } catch (e) {
-                console.error('Word template load error:', e);
+                _cachedWordTemplate = await _fetchWithTimeout('./template.docx');
+                return _cachedWordTemplate;
+            } catch(e) {
                 showToast('خطأ في تحميل قالب Word: ' + e.message);
                 throw e;
             }
@@ -4709,154 +4732,140 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // ═══════════════════════════════════════
 
         // The worker script as a string — contains all heavy ZIP/patch logic
-        const _WORKER_SRC = `
-'use strict';
-// ── CRC / ZIP helpers ──────────────────────────────────────────────────────
-const CRC_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) { let c = i; for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[i] = c; }
-    return t;
-})();
-function crc32(data) { let c = 0xFFFFFFFF; for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
-function u16le(v) { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v, true); return b; }
-function u32le(v) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; }
+        // ── Worker functions defined as real JS (no escaping issues) ─────────────
+        function _workerCRC32Table() {
+            const t = new Uint32Array(256);
+            for (let i=0;i<256;i++){let c=i;for(let j=0;j<8;j++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[i]=c;}
+            return t;
+        }
+        function _workerU16le(v){const b=new Uint8Array(2);new DataView(b.buffer).setUint16(0,v,true);return b;}
+        function _workerU32le(v){const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,v,true);return b;}
 
-async function decompDeflate(data) {
-    if (typeof DecompressionStream !== 'undefined') {
-        try {
-            const ds = new DecompressionStream('deflate-raw');
-            const writer = ds.writable.getWriter();
-            const reader = ds.readable.getReader();
-            const chunks = [];
-            const pump = () => reader.read().then(({ done, value }) => { if (done) return; chunks.push(value); return pump(); });
-            writer.write(data); writer.close();
-            await pump();
-            const out = new Uint8Array(chunks.reduce((a, b) => a + b.length, 0));
-            let p = 0; for (const c of chunks) { out.set(c, p); p += c.length; }
+        async function _workerDecomp(data) {
+            if (typeof DecompressionStream !== 'undefined') {
+                try {
+                    const ds=new DecompressionStream('deflate-raw'),writer=ds.writable.getWriter(),reader=ds.readable.getReader(),chunks=[];
+                    const pump=()=>reader.read().then(({done,value})=>{if(done)return;chunks.push(value);return pump();});
+                    writer.write(data);writer.close();await pump();
+                    const out=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));let p=0;for(const c of chunks){out.set(c,p);p+=c.length;}return out;
+                } catch(e){}
+            }
+            // Pure-JS DEFLATE fallback
+            function rb(d,pos){return function(n){let v=0;for(let i=0;i<n;i++){v|=((d[pos[0]>>3]>>(pos[0]&7))&1)<<i;pos[0]++;}return v;}}
+            const pos=[0],read=rb(data,pos);
+            let cap=Math.max(data.length*4,65536),out=new Uint8Array(cap),olen=0;
+            function grow(){cap*=2;const nb=new Uint8Array(cap);nb.set(out);out=nb;}
+            function wb(b){if(olen>=cap)grow();out[olen++]=b;}
+            const LS=[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+            const LE=[0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+            const DS=[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,161,193,257,321,385,513,641,769,1025,1153,1281,1537,1793,2049,2305,2561,3073,3585,4097,4609,5121,6145,7169,8193,9217,10241,11265,12289,13313,14337,15361,16385];
+            const DE=[0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18,19,19,20,20,21,21,22,22,23,23,24,24,25,25,26,26,27,27,28,28,29,29];
+            function bt(ls){const mx=Math.max(...ls);const cnt=new Array(mx+1).fill(0);for(const l of ls)if(l>0)cnt[l]++;const nc=new Array(mx+1).fill(0);let c=0;for(let i=1;i<=mx;i++){c=(c+cnt[i-1])<<1;nc[i]=c;}const tb={};for(let i=0;i<ls.length;i++){const l=ls[i];if(l>0){const cd=nc[l];nc[l]++;let rv=0;for(let j=0;j<l;j++)rv|=((cd>>j)&1)<<(l-1-j);tb[rv+','+l]=i;}}return{tb,mx};}
+            function ds(tr){let c=0;for(let l=1;l<=tr.mx;l++){c=(c<<1)|read(1);const s=tr.tb[c+','+l];if(s!==undefined)return s;}return -1;}
+            let bf=0;
+            do{
+                bf=read(1);const bt2=read(2);
+                if(bt2===0){pos[0]=Math.ceil(pos[0]/8)*8;const ln=data[pos[0]/8]|(data[pos[0]/8+1]<<8);pos[0]+=32;for(let i=0;i<ln;i++){wb(data[pos[0]/8]);pos[0]+=8;}}
+                else{let lt,dt;
+                    if(bt2===1){const ll=[];for(let i=0;i<144;i++)ll.push(8);for(let i=144;i<256;i++)ll.push(9);for(let i=256;i<280;i++)ll.push(7);for(let i=280;i<288;i++)ll.push(8);lt=bt(ll);dt=bt(new Array(32).fill(5));}
+                    else{const hl=read(5)+257,hd=read(5)+1,hc=read(4)+4;const CO=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];const cl=new Array(19).fill(0);for(let i=0;i<hc;i++)cl[CO[i]]=read(3);const ct=bt(cl);const lg=[];while(lg.length<hl+hd){const s=ds(ct);if(s<16)lg.push(s);else if(s===16){const rp=lg[lg.length-1];for(let i=0;i<read(2)+3;i++)lg.push(rp);}else if(s===17){for(let i=0;i<read(3)+3;i++)lg.push(0);}else{for(let i=0;i<read(7)+11;i++)lg.push(0);}}lt=bt(lg.slice(0,hl));dt=bt(lg.slice(hl));}
+                    while(true){const s=ds(lt);if(s===256)break;if(s<256)wb(s);else{const li=s-257;const ln=LS[li]+read(LE[li]);const di=ds(dt);const dist=DS[di]+read(DE[di]);for(let i=0;i<ln;i++){wb(out[olen-dist]);}}}
+                }
+            }while(!bf);
+            return out.slice(0,olen);
+        }
+
+        async function _workerZipRead(buf) {
+            const files={};let pos=0;
+            while(pos<buf.length-4){
+                if(buf[pos]===0x50&&buf[pos+1]===0x4B&&buf[pos+2]===0x03&&buf[pos+3]===0x04){
+                    const v=new DataView(buf.buffer,buf.byteOffset+pos);
+                    const comp=v.getUint16(8,true),cmpSz=v.getUint32(18,true),namLen=v.getUint16(26,true),extLen=v.getUint16(28,true);
+                    const dataOff=pos+30+namLen+extLen;
+                    const name=new TextDecoder().decode(buf.slice(pos+30,pos+30+namLen));
+                    const cmpData=buf.slice(dataOff,dataOff+cmpSz);
+                    files[name]=(comp===0)?cmpData:await _workerDecomp(cmpData);
+                    pos=dataOff+cmpSz;
+                }else break;
+            }
+            return files;
+        }
+
+        async function _workerZipWrite(files) {
+            const CRC_T=_workerCRC32Table();
+            function crc32(data){let c=0xFFFFFFFF;for(let i=0;i<data.length;i++)c=CRC_T[(c^data[i])&0xFF]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}
+            const lhs=[],cds=[];let offset=0;
+            for(const [name,rawData] of Object.entries(files)){
+                const nb=new TextEncoder().encode(name);
+                let comp=rawData,cm=0;
+                if(typeof CompressionStream!=='undefined'){
+                    try{
+                        const cs=new CompressionStream('deflate-raw'),writer=cs.writable.getWriter(),reader=cs.readable.getReader(),chunks=[];
+                        const pump=()=>reader.read().then(({done,value})=>{if(done)return;chunks.push(value);return pump();});
+                        writer.write(rawData);writer.close();await pump();
+                        const c=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));let p=0;for(const ch of chunks){c.set(ch,p);p+=ch.length;}
+                        if(c.length<rawData.length){comp=c;cm=8;}
+                    }catch(e){comp=rawData;cm=0;}
+                }
+                const crc=crc32(rawData);
+                const u16=_workerU16le,u32=_workerU32le;
+                lhs.push(new Uint8Array([0x50,0x4B,0x03,0x04,0x14,0x00,0x00,0x00,...u16(cm),0x00,0x00,0x00,0x00,...u32(crc),...u32(comp.length),...u32(rawData.length),...u16(nb.length),0x00,0x00,...nb,...comp]));
+                cds.push(new Uint8Array([0x50,0x4B,0x01,0x02,0x1E,0x03,0x14,0x00,0x00,0x00,...u16(cm),0x00,0x00,0x00,0x00,...u32(crc),...u32(comp.length),...u32(rawData.length),...u16(nb.length),0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,...u32(offset),...nb]));
+                offset+=lhs[lhs.length-1].length;
+            }
+            const cdOff=offset,cdSz=cds.reduce((a,b)=>a+b.length,0);
+            const eocd=new Uint8Array([0x50,0x4B,0x05,0x06,0x00,0x00,0x00,0x00,..._workerU16le(cds.length),..._workerU16le(cds.length),..._workerU32le(cdSz),..._workerU32le(cdOff),0x00,0x00]);
+            const total=cdOff+cdSz+eocd.length,out=new Uint8Array(total);
+            let p=0;for(const lh of lhs){out.set(lh,p);p+=lh.length;}for(const cd of cds){out.set(cd,p);p+=cd.length;}out.set(eocd,p);
             return out;
-        } catch(e) { /* fall through */ }
-    }
-    // Pure-JS DEFLATE fallback
-    function rb(d, pos) { return function(n) { let v = 0; for (let i = 0; i < n; i++) { v |= ((d[pos[0] >> 3] >> (pos[0] & 7)) & 1) << i; pos[0]++; } return v; } }
-    const pos = [0], read = rb(data, pos);
-    let cap = Math.max(data.length * 4, 65536), out = new Uint8Array(cap), olen = 0;
-    function grow() { cap *= 2; const nb = new Uint8Array(cap); nb.set(out); out = nb; }
-    function wb(b) { if (olen >= cap) grow(); out[olen++] = b; }
-    const LS=[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
-    const LE=[0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
-    const DS=[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,161,193,257,321,385,513,641,769,1025,1153,1281,1537,1793,2049,2305,2561,3073,3585,4097,4609,5121,6145,7169,8193,9217,10241,11265,12289,13313,14337,15361,16385];
-    const DE=[0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18,19,19,20,20,21,21,22,22,23,23,24,24,25,25,26,26,27,27,28,28,29,29];
-    function bt(ls) { const mx = Math.max(...ls); const cnt = new Array(mx+1).fill(0); for (const l of ls) if (l>0) cnt[l]++; const nc = new Array(mx+1).fill(0); let c=0; for (let i=1;i<=mx;i++){c=(c+cnt[i-1])<<1;nc[i]=c;} const tb={}; for (let i=0;i<ls.length;i++){const l=ls[i];if(l>0){const cd=nc[l];nc[l]++;let rv=0;for(let j=0;j<l;j++)rv|=((cd>>j)&1)<<(l-1-j);tb[rv+','+l]=i;}} return {tb,mx}; }
-    function ds(tr) { let c=0; for (let l=1;l<=tr.mx;l++){c=(c<<1)|read(1);const s=tr.tb[c+','+l];if(s!==undefined)return s;} return -1; }
-    let bf=0;
-    do {
-        bf=read(1); const bt2=read(2);
-        if(bt2===0){pos[0]=Math.ceil(pos[0]/8)*8;const ln=data[pos[0]/8]|(data[pos[0]/8+1]<<8);pos[0]+=32;for(let i=0;i<ln;i++){wb(data[pos[0]/8]);pos[0]+=8;}}
-        else {
-            let lt,dt;
-            if(bt2===1){const ll=[];for(let i=0;i<144;i++)ll.push(8);for(let i=144;i<256;i++)ll.push(9);for(let i=256;i<280;i++)ll.push(7);for(let i=280;i<288;i++)ll.push(8);lt=bt(ll);dt=bt(new Array(32).fill(5));}
-            else{const hl=read(5)+257,hd=read(5)+1,hc=read(4)+4;const CO=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];const cl=new Array(19).fill(0);for(let i=0;i<hc;i++)cl[CO[i]]=read(3);const ct=bt(cl);const lg=[];while(lg.length<hl+hd){const s=ds(ct);if(s<16)lg.push(s);else if(s===16){const rp=lg[lg.length-1];for(let i=0;i<read(2)+3;i++)lg.push(rp);}else if(s===17){for(let i=0;i<read(3)+3;i++)lg.push(0);}else{for(let i=0;i<read(7)+11;i++)lg.push(0);}}lt=bt(lg.slice(0,hl));dt=bt(lg.slice(hl));}
-            while(true){const s=ds(lt);if(s===256)break;if(s<256)wb(s);else{const li=s-257;const ln=LS[li]+read(LE[li]);const di=ds(dt);const dist=DS[di]+read(DE[di]);for(let i=0;i<ln;i++){wb(out[olen-dist]);}}}
         }
-    } while(!bf);
-    return out.slice(0,olen);
-}
 
-async function zipRead(buf) {
-    const files = {};
-    let pos = 0;
-    while (pos < buf.length - 4) {
-        if (buf[pos]===0x50 && buf[pos+1]===0x4B && buf[pos+2]===0x03 && buf[pos+3]===0x04) {
-            const v = new DataView(buf.buffer, buf.byteOffset + pos);
-            const comp=v.getUint16(8,true), cmpSz=v.getUint32(18,true), namLen=v.getUint16(26,true), extLen=v.getUint16(28,true);
-            const dataOff = pos + 30 + namLen + extLen;
-            const name = new TextDecoder().decode(buf.slice(pos+30, pos+30+namLen));
-            const cmpData = buf.slice(dataOff, dataOff+cmpSz);
-            files[name] = (comp === 0) ? cmpData : await decompDeflate(cmpData);
-            pos = dataOff + cmpSz;
-        } else break;
-    }
-    return files;
-}
-
-async function zipWrite(files) {
-    const lhs=[], cds=[];
-    let offset=0;
-    for (const [name, rawData] of Object.entries(files)) {
-        const nb = new TextEncoder().encode(name);
-        let comp=rawData, cm=0;
-        if (typeof CompressionStream !== 'undefined') {
-            try {
-                const cs = new CompressionStream('deflate-raw');
-                const writer=cs.writable.getWriter(), reader=cs.readable.getReader();
-                const chunks=[];
-                const pump=()=>reader.read().then(({done,value})=>{if(done)return;chunks.push(value);return pump();});
-                writer.write(rawData); writer.close(); await pump();
-                const c=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
-                let p=0; for(const ch of chunks){c.set(ch,p);p+=ch.length;}
-                if(c.length<rawData.length){comp=c;cm=8;}
-            } catch(e){comp=rawData;cm=0;}
+        function _workerPatchAllCells(xml, patches) {
+            const map={};
+            for(const [ref,val] of patches) map[ref]=val;
+            const esc=v=>String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return xml.replace(/<c r="([A-Z]+\d+)"([^/]*)(\/>)|<c r="([A-Z]+\d+)"([^>]*)>[\s\S]*?<\/c>/g,(m,r1,a1,selfClose,r2,a2)=>{
+                const ref=r1||r2;
+                if(!ref||!(ref in map))return m;
+                const attrs=(a1!==undefined?a1:a2)||'';
+                const value=map[ref];
+                const a=attrs.replace(/\s*t="[^"]*"/g,'');
+                if(value===null||value===''||value===undefined)return '<c r="'+ref+'"'+a+'/>';
+                if(typeof value==='number')return '<c r="'+ref+'"'+a+'><v>'+value+'</v></c>';
+                return '<c r="'+ref+'"'+a+' t="str"><v>'+esc(value)+'</v></c>';
+            });
         }
-        const crc=crc32(rawData);
-        lhs.push(new Uint8Array([0x50,0x4B,0x03,0x04,0x14,0x00,0x00,0x00,...u16le(cm),0x00,0x00,0x00,0x00,...u32le(crc),...u32le(comp.length),...u32le(rawData.length),...u16le(nb.length),0x00,0x00,...nb,...comp]));
-        cds.push(new Uint8Array([0x50,0x4B,0x01,0x02,0x1E,0x03,0x14,0x00,0x00,0x00,...u16le(cm),0x00,0x00,0x00,0x00,...u32le(crc),...u32le(comp.length),...u32le(rawData.length),...u16le(nb.length),0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,...u32le(offset),...nb]));
-        offset += lhs[lhs.length-1].length;
-    }
-    const cdOff=offset, cdSz=cds.reduce((a,b)=>a+b.length,0);
-    const eocd=new Uint8Array([0x50,0x4B,0x05,0x06,0x00,0x00,0x00,0x00,...u16le(cds.length),...u16le(cds.length),...u32le(cdSz),...u32le(cdOff),0x00,0x00]);
-    const total=cdOff+cdSz+eocd.length, out=new Uint8Array(total);
-    let p=0; for(const lh of lhs){out.set(lh,p);p+=lh.length;} for(const cd of cds){out.set(cd,p);p+=cd.length;} out.set(eocd,p);
-    return out;
-}
 
-// ── patchCell: build a lookup map then do ONE pass over the XML ───────────────
-function patchAllCells(xml, patches) {
-    // patches = [ [cellRef, value], ... ]
-    // Build a map for O(1) lookup
-    const map = {};
-    for (const [ref, val] of patches) map[ref] = val;
+        function _workerForceRecalc(xml) {
+            if(xml.includes('<calcPr'))return xml.replace(/<calcPr[^>]*\/>/,'<calcPr calcId="1" fullCalcOnLoad="1"/>');
+            return xml.replace(/(<[/]workbook>)/,'<calcPr calcId="1" fullCalcOnLoad="1"/>$1');
+        }
 
-    const esc = v => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        function _buildWorkerBlob() {
+            // Serialize the above functions into a self-contained worker script
+            const fns = [
+                _workerCRC32Table, _workerU16le, _workerU32le,
+                _workerDecomp, _workerZipRead, _workerZipWrite,
+                _workerPatchAllCells, _workerForceRecalc
+            ].map(f => f.toString()).join('\n\n');
 
-    // Single regex pass: match any <c r="XN" ...> element
-    return xml.replace(/<c r="([A-Z]+\\d+)"([^/]*)\\/>|<c r="([A-Z]+\\d+)"([^>]*)>[\\s\\S]*?<\\/c>/g, (m, r1, a1, r2, a2) => {
-        const ref = r1 || r2;
-        const attrs = a1 !== undefined ? a1 : a2;
-        if (!(ref in map)) return m;  // not a cell we care about — keep original
-        const value = map[ref];
-        const a = attrs.replace(/\\s*t="[^"]*"/g, '');
-        if (value === null || value === '' || value === undefined) return '<c r="' + ref + '"' + a + '/>';
-        if (typeof value === 'number') return '<c r="' + ref + '"' + a + '><v>' + value + '</v></c>';
-        return '<c r="' + ref + '"' + a + ' t="str"><v>' + esc(value) + '</v></c>';
-    });
-}
-
-function forceRecalculation(xml) {
-    if (xml.includes('<calcPr')) return xml.replace(/<calcPr[^>]*\\/>/, '<calcPr calcId="1" fullCalcOnLoad="1"/>');
-    return xml.replace(/(<\\/workbook>)/, '<calcPr calcId="1" fullCalcOnLoad="1"/>$1');
-}
-
-// ── Main worker message handler ───────────────────────────────────────────────
+            const handler = `
 self.onmessage = async function(e) {
     const { templateBuf, scores, notes, ROW_MAP, meta } = e.data;
     try {
         postMessage({ status: 'progress', msg: 'فك ضغط القالب...' });
-        const files = await zipRead(new Uint8Array(templateBuf));
+        const files = await _workerZipRead(new Uint8Array(templateBuf));
 
-        // Force recalc
         let workbook = new TextDecoder().decode(files['xl/workbook.xml']);
-        files['xl/workbook.xml'] = new TextEncoder().encode(forceRecalculation(workbook));
+        files['xl/workbook.xml'] = new TextEncoder().encode(_workerForceRecalc(workbook));
 
-        // Decode sheets
         let sheet1 = new TextDecoder().decode(files['xl/worksheets/sheet1.xml']);
         let sheet2 = new TextDecoder().decode(files['xl/worksheets/sheet2.xml']);
         let sheet3 = new TextDecoder().decode(files['xl/worksheets/sheet3.xml']);
 
-        // Build patch lists — one pass per sheet
-        const patches1 = [], patches2 = [], patches3 = [];
-
-        patches3.push(['A3', 'المحافظة : الاسكندرية                                          تواريخ التقييم : ' + (meta.dates || '')]);
-        patches3.push(['A4', 'إسم المركز / الوحدة : ' + (meta.hospitalName || '') + '                                إسم القائم بالتقييم : ' + (meta.inspectors || '')]);
+        const patches1=[], patches2=[], patches3=[];
+        patches3.push(['A3', 'المحافظة : الاسكندرية                                          تواريخ التقييم : ' + (meta.dates||'')]);
+        patches3.push(['A4', 'إسم المركز / الوحدة : ' + (meta.hospitalName||'') + '                                إسم القائم بالتقييم : ' + (meta.inspectors||'')]);
 
         for (const [ik, rawRow] of Object.entries(ROW_MAP)) {
             const onSheet2 = rawRow < 0;
@@ -4864,34 +4873,34 @@ self.onmessage = async function(e) {
             const sc = scores[ik];
             const note = notes[ik] || '';
             if (onSheet2) {
-                if (sc === 'N/A') patches2.push(['G' + xRow, 'N/A']);
-                else if (sc !== undefined && sc !== null) patches2.push(['G' + xRow, sc]);
-                patches2.push(['F' + xRow, note]);
+                if (sc==='N/A') patches2.push(['G'+xRow,'N/A']);
+                else if (sc!==undefined&&sc!==null) patches2.push(['G'+xRow, sc]);
+                patches2.push(['F'+xRow, note]);
             } else {
-                if (sc === 'N/A') patches1.push(['E' + xRow, 'N/A']);
-                else if (sc !== undefined && sc !== null) patches1.push(['E' + xRow, sc]);
-                patches1.push(['F' + xRow, note]);
+                if (sc==='N/A') patches1.push(['E'+xRow,'N/A']);
+                else if (sc!==undefined&&sc!==null) patches1.push(['E'+xRow, sc]);
+                patches1.push(['F'+xRow, note]);
             }
         }
 
         postMessage({ status: 'progress', msg: 'كتابة البيانات...' });
-        sheet1 = patchAllCells(sheet1, patches1);
-        sheet2 = patchAllCells(sheet2, patches2);
-        sheet3 = patchAllCells(sheet3, patches3);
+        sheet1 = _workerPatchAllCells(sheet1, patches1);
+        sheet2 = _workerPatchAllCells(sheet2, patches2);
+        sheet3 = _workerPatchAllCells(sheet3, patches3);
 
         files['xl/worksheets/sheet1.xml'] = new TextEncoder().encode(sheet1);
         files['xl/worksheets/sheet2.xml'] = new TextEncoder().encode(sheet2);
         files['xl/worksheets/sheet3.xml'] = new TextEncoder().encode(sheet3);
 
         postMessage({ status: 'progress', msg: 'ضغط الملف...' });
-        const result = await zipWrite(files);
-
+        const result = await _workerZipWrite(files);
         postMessage({ status: 'done', result: result.buffer }, [result.buffer]);
     } catch(err) {
-        postMessage({ status: 'error', msg: err.message });
+        postMessage({ status: 'error', msg: err.message || String(err) });
     }
-};
-`;
+};`;
+            return new Blob([fns + '\n\n' + handler], { type: 'application/javascript' });
+        }
 
         let _exportingExcel = false;
         async function exportExcel() {
@@ -4902,9 +4911,8 @@ self.onmessage = async function(e) {
             try {
                 const templateBuf = await loadExcelTemplate();
 
-                // Spin up a fresh worker from the inline source string
-                const workerBlob = new Blob([_WORKER_SRC], { type: 'application/javascript' });
-                const workerUrl  = URL.createObjectURL(workerBlob);
+                // Spin up a fresh worker from serialized functions (no escaping issues)
+                const workerUrl  = URL.createObjectURL(_buildWorkerBlob());
                 const worker     = new Worker(workerUrl);
                 URL.revokeObjectURL(workerUrl);
 
@@ -5176,6 +5184,7 @@ self.onmessage = async function(e) {
             buildSidebarNav();
             showHome();
             updateProgress();
+            preloadTemplates(); // pre-warm both templates immediately
         });
 
         function buildSidebarNav() {
