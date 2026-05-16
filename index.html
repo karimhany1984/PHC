@@ -5045,20 +5045,20 @@ self.onmessage = async function(e) {
             return days[date.getDay()];
         }
 
-        function formatArabicDate(daPHCr) {
-            if (!daPHCr) return '';
+        function formatArabicDate(dateStr) {
+            if (!dateStr) return '';
             let d = null;
-            const dmyMatch = daPHCr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+            const dmyMatch = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
             if (dmyMatch) {
                 d = new Date(parseInt(dmyMatch[3]), parseInt(dmyMatch[2]) - 1, parseInt(dmyMatch[1]));
             } else {
-                const isoMatch = daPHCr.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+                const isoMatch = dateStr.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
                 if (isoMatch) {
                     d = new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]));
                 }
             }
             if (!d || isNaN(d)) {
-                return daPHCr;
+                return dateStr;
             }
             const day = arabicDay(d);
             const dd = d.getDate();
@@ -5232,7 +5232,7 @@ self.onmessage = async function(e) {
                 await new Promise(r => setTimeout(r, 30));
                 const result = await zipWrite(files);
 
-                const fname = `تقرير_${hospitalName || 'الوحدة'}_${rawDate || new Date().toLocaleDaPHCring('ar-EG')}.docx`;
+                const fname = `تقرير_${hospitalName || 'الوحدة'}_${rawDate || new Date().toLocaleDateString('ar-EG')}.docx`;
                 const blob = new Blob([result], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
                 const url2 = URL.createObjectURL(blob);
                 const a = document.createElement('a');
