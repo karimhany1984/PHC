@@ -4347,7 +4347,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             return out;
         }
 
-        const _iosVer = (() => { const ua = navigator.userAgent; if (/iP(hone|od|ad)/.PHC(ua)) { const m = ua.match(/OS (\d+)_/); if (m) return parseInt(m[1], 10); } return 99; })();
+        const _iosVer = (() => { const ua = navigator.userAgent; if (/iP(hone|od|ad)/.test(ua)) { const m = ua.match(/OS (\d+)_/); if (m) return parseInt(m[1], 10); } return 99; })();
         const _canCompress = typeof CompressionStream !== 'undefined' && _iosVer >= 16;
 
         // Patch a single cell
@@ -4432,7 +4432,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // ═══════════════════════════════════════
         function getIOSVersion() {
             const ua = navigator.userAgent;
-            if (/iP(hone|od|ad)/.PHC(ua)) {
+            if (/iP(hone|od|ad)/.test(ua)) {
                 const match = ua.match(/OS (\d+)_/);
                 if (match) return parseInt(match[1], 10);
             }
@@ -4470,8 +4470,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                     const xml = m[0];
                     const v = xml.match(/<v>([^<]*)<\/v>/);
                     if (!v) return '';
-                    if (/\bt="s"/.PHC(xml)) return sharedStrings[parseInt(v[1])] || '';
-                    if (/\bt="str"/.PHC(xml)) return v[1];
+                    if (/\bt="s"/.test(xml)) return sharedStrings[parseInt(v[1])] || '';
+                    if (/\bt="str"/.test(xml)) return v[1];
                     return v[1];
                 };
 
@@ -4509,7 +4509,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                                 const vMatch = cMatch[0].match(/<v>([^<]*)<\/v>/);
                                 if (vMatch) {
                                     let val = vMatch[1].trim();
-                                    if (/\bt="s"/.PHC(cMatch[0])) {
+                                    if (/\bt="s"/.test(cMatch[0])) {
                                         const ssIdx = parseInt(val);
                                         if (!isNaN(ssIdx) && ssItems[ssIdx] !== undefined) {
                                             val = ssItems[ssIdx];
@@ -4527,7 +4527,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                             if (dMatch) {
                                 const vMatch = dMatch[0].match(/<v>([^<]*)<\/v>/);
                                 if (vMatch && vMatch[1].trim()) {
-                                    if (/\bt="s"/.PHC(dMatch[0])) {
+                                    if (/\bt="s"/.test(dMatch[0])) {
                                         const ssIdx = parseInt(vMatch[1].trim());
                                         if (!isNaN(ssIdx) && ssItems[ssIdx]) notes[mapKey] = ssItems[ssIdx];
                                     } else {
@@ -4591,7 +4591,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                                 const vM = cM[0].match(/<v>([^<]*)<\/v>/);
                                 if (vM) {
                                     let val = vM[1].trim();
-                                    if (/\bt="s"/.PHC(cM[0])) {
+                                    if (/\bt="s"/.test(cM[0])) {
                                         const si = parseInt(val);
                                         if (!isNaN(si) && ssItems[si] !== undefined) val = ssItems[si];
                                     }
@@ -4606,7 +4606,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                             if (dM) {
                                 const vM = dM[0].match(/<v>([^<]*)<\/v>/);
                                 if (vM && vM[1].trim()) {
-                                    if (/\bt="s"/.PHC(dM[0])) {
+                                    if (/\bt="s"/.test(dM[0])) {
                                         const si = parseInt(vM[1].trim());
                                         if (!isNaN(si) && ssItems[si]) incomingNotes[mapKey] = ssItems[si];
                                     } else {
