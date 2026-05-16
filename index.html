@@ -4334,16 +4334,24 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // TEMPLATE LOADER - FETCH EXTERNAL FILES
         // ═══════════════════════════════════════
         async function loadExcelTemplate() {
+            showToast('جاري تحميل قالب التصدير...');
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
             try {
-                showToast('جاري تحميل قالب التصدير...');
-                const response = await fetch('./template.xlsx');
+                const response = await fetch('./template.xlsx', { signal: controller.signal });
+                clearTimeout(timeoutId);
                 if (!response.ok) {
                     throw new Error(`تعذّر تحميل القالب: ${response.status} ${response.statusText}`);
                 }
                 return new Uint8Array(await response.arrayBuffer());
             } catch (e) {
+                clearTimeout(timeoutId);
                 console.error('Excel template load error:', e);
-                showToast('خطأ في تحميل القالب: ' + e.message);
+                if (e.name === 'AbortError') {
+                    showToast('انتهت مهلة تحميل القالب — تأكد من أن ملف template.xlsx موجود على الخادم');
+                } else {
+                    showToast('خطأ في تحميل القالب: ' + e.message);
+                }
                 throw e;
             }
         }
@@ -4696,7 +4704,10 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             return workbookXml;
         }
 
+        let _exportingExcel = false;
         async function exportExcel() {
+            if (_exportingExcel) { showToast('جاري التصدير بالفعل، يرجى الانتظار...'); return; }
+            _exportingExcel = true;
             showToast('جاري تجهيز الملف...');
             await new Promise(r => setTimeout(r, 50));
             try {
@@ -4760,6 +4771,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             } catch (e) {
                 console.error(e);
                 showToast('خطأ في التصدير: ' + e.message);
+            } finally {
+                _exportingExcel = false;
             }
         }
 
