@@ -4333,36 +4333,83 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         // ═══════════════════════════════════════
         // TEMPLATE LOADER - FETCH EXTERNAL FILES
         // ═══════════════════════════════════════
-        async function loadExcelTemplate() {
-            showToast('جاري تحميل قالب التصدير...');
+        // ═══════════════════════════════════════
+        // TEMPLATE CACHE — loaded once at startup, reused on every export
+        // ═══════════════════════════════════════
+        let _cachedExcelTemplate = null;   // Uint8Array after first load
+        let _cachedWordTemplate  = null;   // Uint8Array after first load
+        let _templateLoadPromise = null;   // single in-flight promise (prevents duplicate fetches)
+
+        async function _fetchWithTimeout(url, timeoutMs = 15000) {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+            const tid = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const response = await fetch('./template.xlsx', { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (!response.ok) {
-                    throw new Error(`تعذّر تحميل القالب: ${response.status} ${response.statusText}`);
-                }
-                return new Uint8Array(await response.arrayBuffer());
+                const r = await fetch(url, { signal: controller.signal });
+                clearTimeout(tid);
+                if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText} — ${url}`);
+                return new Uint8Array(await r.arrayBuffer());
             } catch (e) {
-                clearTimeout(timeoutId);
-                console.error('Excel template load error:', e);
-                if (e.name === 'AbortError') {
-                    showToast('انتهت مهلة تحميل القالب — تأكد من أن ملف template.xlsx موجود على الخادم');
+                clearTimeout(tid);
+                throw e;
+            }
+        }
+
+        // Call this once on DOMContentLoaded — silently pre-warms both templates
+        async function preloadTemplates() {
+            if (_cachedExcelTemplate && _cachedWordTemplate) return; // already loaded
+            if (_templateLoadPromise) return _templateLoadPromise;   // already in flight
+
+            _templateLoadPromise = (async () => {
+                const results = await Promise.allSettled([
+                    _fetchWithTimeout('./template.xlsx'),
+                    _fetchWithTimeout('./template.docx')
+                ]);
+
+                if (results[0].status === 'fulfilled') {
+                    _cachedExcelTemplate = results[0].value;
+                    console.log('[Templates] ✓ template.xlsx cached in memory (' + _cachedExcelTemplate.length + ' bytes)');
                 } else {
-                    showToast('خطأ في تحميل القالب: ' + e.message);
+                    console.warn('[Templates] ✗ template.xlsx failed:', results[0].reason);
                 }
+
+                if (results[1].status === 'fulfilled') {
+                    _cachedWordTemplate = results[1].value;
+                    console.log('[Templates] ✓ template.docx cached in memory (' + _cachedWordTemplate.length + ' bytes)');
+                } else {
+                    console.warn('[Templates] ✗ template.docx failed:', results[1].reason);
+                }
+
+                _templateLoadPromise = null;
+            })();
+
+            return _templateLoadPromise;
+        }
+
+        async function loadExcelTemplate() {
+            if (_cachedExcelTemplate) return _cachedExcelTemplate;  // instant — no fetch needed
+
+            // Not cached yet — fetch now (with user-visible feedback)
+            showToast('جاري تحميل قالب Excel...');
+            try {
+                _cachedExcelTemplate = await _fetchWithTimeout('./template.xlsx');
+                return _cachedExcelTemplate;
+            } catch (e) {
+                console.error('Excel template load error:', e);
+                const msg = e.name === 'AbortError'
+                    ? 'انتهت مهلة تحميل القالب — تأكد من وجود template.xlsx على الخادم'
+                    : 'خطأ في تحميل قالب Excel: ' + e.message;
+                showToast(msg);
                 throw e;
             }
         }
 
         async function loadWordTemplate() {
+            if (_cachedWordTemplate) return _cachedWordTemplate;    // instant — no fetch needed
+
+            showToast('جاري تحميل قالب Word...');
             try {
-                const response = await fetch('./template.docx');
-                if (!response.ok) {
-                    throw new Error(`تعذّر تحميل قالب Word: ${response.status}`);
-                }
-                return new Uint8Array(await response.arrayBuffer());
+                _cachedWordTemplate = await _fetchWithTimeout('./template.docx');
+                return _cachedWordTemplate;
             } catch (e) {
                 console.error('Word template load error:', e);
                 showToast('خطأ في تحميل قالب Word: ' + e.message);
@@ -5001,6 +5048,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             buildSidebarNav();
             showHome();
             updateProgress();
+            preloadTemplates(); // 🔥 fetch both templates into memory immediately
         });
 
         function buildSidebarNav() {
