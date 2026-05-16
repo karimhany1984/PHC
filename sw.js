@@ -1,4 +1,4 @@
-const CACHE_NAME = 'test-v32-phc-v6';
+const CACHE_NAME = 'test-v32-phc-v7';
 const BASE = '/test/';  // 
 
 // Files that MUST be available offline immediately
