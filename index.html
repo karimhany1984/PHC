@@ -5801,7 +5801,7 @@ self.onmessage = async function(e) {
                     sw.postMessage({ type: 'GET_CACHE_NAME' }, [mc.port2]);
                 });
 
-                const sharedFileKey = location.origin + '/hospital-form/shared-file';
+                const sharedFileKey = location.origin + '/PHC/shared-file';
                 const cache = await caches.open(cacheName);
                 const response = await cache.match(sharedFileKey);
                 if (!response) return;
