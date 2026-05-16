@@ -2,8 +2,8 @@
   "name": "نموذج متابعة وحدات الرعاية الصحية الأولية",
   "short_name": "متابعة PHC",
   "description": "إدارة متابعة المديريات - نموذج متابعة وحدات الرعاية الصحية الأولية",
-  "start_url": "https://karimhany1984.github.io/test/index.html",
-  "scope": "https://karimhany1984.github.io/test/",
+  "start_url": "https://karimhany1984.github.io/PHC/index.html",
+  "scope": "https://karimhany1984.github.io/PHC/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#1a6faf",
@@ -12,18 +12,18 @@
   "dir": "rtl",
   "icons": [
     {
-      "src": "https://karimhany1984.github.io/test/icon.png",
+      "src": "https://karimhany1984.github.io/PHC/icon.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "https://karimhany1984.github.io/test/icon.png",
+      "src": "https://karimhany1984.github.io/PHC/icon.png",
       "sizes": "512x512",
       "type": "image/png"
     }
   ],
   "share_target": {
-    "action": "/test/share-target",
+    "action": "/PHC/share-target",
     "method": "POST",
     "enctype": "multipart/form-data",
     "params": {
