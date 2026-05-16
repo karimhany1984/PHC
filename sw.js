@@ -5,7 +5,7 @@ const BASE = '/test/';  //
 const PRE_CACHE_ASSETS = [
     BASE + 'index.html',
     BASE + 'manifest.json',
-    BASE + 'Icon.png',
+    BASE + 'icon.png',
     BASE + 'template.docx',
     BASE + 'template.xlsx'
 ];
