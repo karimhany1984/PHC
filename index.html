@@ -1359,12 +1359,12 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
   general__25: 39,
   general__26: 41,
   general__27: 42,
-  general__28: 44,
-  general__29: 46,
-  general__30: 47,
-  general__31: 48,
-  general__32: 49,
-  general__33: 52,
+  general__28: 43,
+  general__29: 44,
+  general__30: 46,
+  general__31: 47,
+  general__32: 48,
+  general__33: 49,
   customer_voice__0: 53,
   customer_voice__1: 54,
   customer_voice__2: 55,
@@ -1752,6 +1752,33 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
   counseling__14: 524,
   counseling__15: 525,
   counseling__16: 526,
+  counseling__17: 20529,
+  counseling__18: 20530,
+  counseling__19: 20531,
+  counseling__20: 20532,
+  counseling__21: 20533,
+  counseling__22: 20534,
+  counseling__23: 20535,
+  counseling__24: 20538,
+  counseling__25: 20539,
+  counseling__26: 20540,
+  counseling__27: 20541,
+  counseling__28: 20542,
+  counseling__29: 20545,
+  counseling__30: 20546,
+  counseling__31: 20547,
+  counseling__32: 20548,
+  counseling__33: 20549,
+  counseling__34: 20550,
+  counseling__35: 20551,
+  counseling__36: 20552,
+  counseling__37: 20553,
+  counseling__38: 20554,
+  counseling__39: 20555,
+  counseling__40: 20556,
+  counseling__41: 20557,
+  counseling__42: 20558,
+  counseling__43: 20559,
   woman_health__0: -6,
   woman_health__1: -7,
   woman_health__2: -8,
@@ -4807,14 +4834,19 @@ self.onmessage = async function(e) {
         patches3.push(['A4', 'إسم المركز / الوحدة : ' + (meta.hospitalName||'') + '                                إسم القائم بالتقييم : ' + (meta.inspectors||'')]);
 
         for (const [ik, rawRow] of Object.entries(ROW_MAP)) {
-            const onSheet2 = rawRow < 0;
-            const xRow = Math.abs(rawRow);
-            const sc = scores[ik];
-            const note = notes[ik] || '';
+            const onSheet2  = rawRow < 0;
+            const onColH    = rawRow >= 20000;           // sheet1, column H
+            const xRow      = onColH ? rawRow - 20000 : Math.abs(rawRow);
+            const sc        = scores[ik];
+            const note      = notes[ik] || '';
             if (onSheet2) {
                 if (sc==='N/A') patches2.push(['G'+xRow,'N/A']);
                 else if (sc!==undefined&&sc!==null) patches2.push(['G'+xRow, sc]);
                 patches2.push(['F'+xRow, note]);
+            } else if (onColH) {
+                if (sc==='N/A') patches1.push(['H'+xRow,'N/A']);
+                else if (sc!==undefined&&sc!==null) patches1.push(['H'+xRow, sc]);
+                patches1.push(['G'+xRow, note]);
             } else {
                 if (sc==='N/A') patches1.push(['E'+xRow,'N/A']);
                 else if (sc!==undefined&&sc!==null) patches1.push(['E'+xRow, sc]);
