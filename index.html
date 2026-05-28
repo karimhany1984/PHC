@@ -4831,8 +4831,10 @@ self.onmessage = async function(e) {
         let sheet3 = new TextDecoder().decode(files['xl/worksheets/sheet3.xml']);
 
         const patches1=[], patches2=[], patches3=[];
-        patches3.push(['A3', 'المحافظة : الاسكندرية                                          تواريخ التقييم : ' + (meta.dates||'')]);
-        patches3.push(['A4', 'إسم المركز / الوحدة : ' + (meta.hospitalName||'') + '                                إسم القائم بالتقييم : ' + (meta.inspectors||'')]);
+        patches3.push(['A3', 'المحافظة : الاسكندرية']);
+        patches3.push(['F3', meta.dates||'']);
+        patches3.push(['D4', meta.hospitalName||'']);
+        patches3.push(['F4', meta.inspectors||'']);
 
         for (const [ik, rawRow] of Object.entries(ROW_MAP)) {
             const onSheet2  = rawRow < 0;
