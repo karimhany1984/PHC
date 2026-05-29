@@ -6546,7 +6546,7 @@ async function renderReportsList(filters = { region: '', hospitalName: '', year:
     const regionsList = Array.from(regionsSet).sort();
     // Units for the selected region filter (for cascading dropdown)
     const unitsList = filters.region
-        ? allReports.filter(r => r.region === filters.region).map(r => r.hospitalName).filter(Boolean)
+    ? allReports.filter(r => (r.region || '').trim() === filters.region.trim()).map(r => r.hospitalName).filter(Boolean)
         : allReports.map(r => r.hospitalName).filter(Boolean);
     const unitsSet = [...new Set(unitsList)].sort();
     const yearsList = Array.from(yearsSet).sort().reverse();
@@ -6554,7 +6554,7 @@ async function renderReportsList(filters = { region: '', hospitalName: '', year:
     
     // ─── Apply selected filters ───────────────────────────────────────
     const filteredReports = allReports.filter(report => {
-        if (filters.region && report.region !== filters.region) return false;
+       if (filters.region && (report.region || '').trim() !== filters.region.trim()) return false;
         if (filters.hospitalName && report.hospitalName !== filters.hospitalName) return false;
         if (filters.year || filters.month) {
             const dateStr = report.inspectionDate;
