@@ -5482,7 +5482,12 @@ self.onmessage = async function(e) {
 
         function showSection(key) {
             if (key === 'home') { showHome(); return; }
-            if (key === 'summary') { currentSection = 'summary'; buildSidebarNav(); renderSummary(); return; }
+            if (key === 'summary') {
+    currentSection = 'summary';
+    document.getElementById('mainContent').scrollTo({ top: 0, behavior: 'smooth' });
+    buildSidebarNav();
+    renderSummary();
+    return;
 
             currentSection = key;
             buildSidebarNav();
