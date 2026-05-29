@@ -77,18 +77,15 @@
         }
     }
 
-    async function applyUpdate() {
+  async function applyUpdate() {
     const panel = document.getElementById('updateConfirmPanel');
     if (panel) panel.remove();
     const btn = document.getElementById('updateCheckBtn');
     if (btn) btn.disabled = true;
     showUpdateToast('⏳ جارى التحديث... لا تغلق التطبيق', 'blue', 0);
 
-    // Track reload count across page reloads
     const reloadCount = parseInt(sessionStorage.getItem('updateReloadCount') || '0');
-
     if (reloadCount >= 2) {
-        // We've reloaded enough — done
         sessionStorage.removeItem('updateReloadCount');
         showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
         if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
@@ -96,20 +93,54 @@
     }
 
     try {
-        if (window._swReg) await window._swReg.update();
         const reg = await navigator.serviceWorker.ready;
-        if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
 
+        // Helper: send SKIP_WAITING to whichever SW is waiting
+        const skipWaiting = (sw) => {
+            sw.postMessage({ type: 'SKIP_WAITING' });
+        };
+
+        if (reg.waiting) {
+            // SW already waiting — activate immediately
+            skipWaiting(reg.waiting);
+        } else {
+            // SW not yet downloaded — trigger update and wait for it
+            await reg.update();
+            if (reg.waiting) {
+                skipWaiting(reg.waiting);
+            } else if (reg.installing) {
+                // Still installing — wait until it reaches 'installed' state
+                await new Promise((resolve) => {
+                    reg.installing.addEventListener('statechange', function handler(e) {
+                        if (e.target.state === 'installed') {
+                            e.target.removeEventListener('statechange', handler);
+                            skipWaiting(e.target);
+                            resolve();
+                        } else if (e.target.state === 'redundant') {
+                            // No update was available
+                            e.target.removeEventListener('statechange', handler);
+                            resolve();
+                        }
+                    });
+                });
+            }
+        }
+
+        // Now listen for SW takeover and reload
         navigator.serviceWorker.addEventListener('controllerchange', () => {
             sessionStorage.setItem('updateReloadCount', reloadCount + 1);
             setTimeout(() => window.location.reload(true), 800);
-        }, { once: true }); // ← once:true prevents duplicate firings
+        }, { once: true });
 
-        // Fallback if no SW was waiting
+        // Fallback — if no update was available at all
         setTimeout(() => {
-            sessionStorage.setItem('updateReloadCount', reloadCount + 1);
-            window.location.reload(true);
-        }, 4000);
+            if (!sessionStorage.getItem('updateReloadCount') || 
+                parseInt(sessionStorage.getItem('updateReloadCount')) === reloadCount) {
+                sessionStorage.removeItem('updateReloadCount');
+                showUpdateToast('✅ التطبيق محدث بالفعل', 'green', 4000);
+                if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+            }
+        }, 6000);
 
     } catch(e) {
         sessionStorage.removeItem('updateReloadCount');
