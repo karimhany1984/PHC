@@ -5342,7 +5342,7 @@ self.onmessage = async function(e) {
         function buildSidebarNav() {
             const el = document.getElementById('sidebarNav');
             let html = `<div class="nav-item ${currentSection === 'home' ? 'active' : ''}" onclick="showHome()">
-        <div class="nav-icon ic-summary"></div>
+        <div class="nav-icony">🏠</div>
         <div class="nav-text"><div class="nav-title">الصفحة الرئيسية</div></div>
       </div>
       <div class="nav-item ${currentSection === 'summary' ? 'active' : ''}" onclick="showSection('summary')">
@@ -5472,9 +5472,6 @@ self.onmessage = async function(e) {
           <div class="quick-actions">
             <button class="qa-btn" onclick="openUploadDialog()">📂 فتح ملف محفوظ سابق</button>
             <button class="qa-btn" onclick="openMergeDialog()" style="border-color:#0a7764;color:#0a7764;">🔗 دمج تقرير مفتش آخر</button>
-            
-            <button class="qa-btn" onclick="showSection('summary')">📈 ملخص النتائج</button>
-            <button class="qa-btn green" onclick="exportExcel()">📥 تصدير Excel</button>
             <button class="qa-btn" onclick="confirmClear()">🔄 مسح الكل</button>
           </div>
 
@@ -5634,9 +5631,7 @@ self.onmessage = async function(e) {
             </div>
           </div>
           <div class="quick-actions">
-            <button class="qa-btn green" onclick="exportExcel()">📥 تصدير Excel</button>
             <button class="qa-btn" style="background:var(--primary);color:#fff;" onclick="exportWord()">📄 تصدير Word</button>
-            <button class="qa-btn" onclick="showHome()">🏠 الرئيسية</button>
           </div>
           <div class="sum-grid">${cardsHtml}</div>
         </div>`;
