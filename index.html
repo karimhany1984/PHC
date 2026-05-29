@@ -17,6 +17,10 @@
     window._swReg = null;
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
+			if (sessionStorage.getItem('justUpdated') === '1') {
+    sessionStorage.removeItem('justUpdated');
+    setTimeout(() => showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000), 800);
+}
             navigator.serviceWorker.register('./sw.js').then(reg => {
                 window._swReg = reg;
                 // Do NOT auto-call reg.update() or postMessage SKIP_WAITING
@@ -84,33 +88,24 @@
     if (btn) btn.disabled = true;
     showUpdateToast('⏳ جارى التحديث... لا تغلق التطبيق', 'blue', 0);
 
-    const reloadCount = parseInt(sessionStorage.getItem('updateReloadCount') || '0');
-    if (reloadCount >= 2) {
-        sessionStorage.removeItem('updateReloadCount');
-        showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
-        if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
-        return;
-    }
+    sessionStorage.removeItem('updateReloadCount');
 
     try {
         const reg = await navigator.serviceWorker.ready;
 
         const skipAndReload = (sw) => {
+            sessionStorage.setItem('justUpdated', '1');
             sw.postMessage({ type: 'SKIP_WAITING' });
             navigator.serviceWorker.addEventListener('controllerchange', () => {
-                sessionStorage.setItem('updateReloadCount', reloadCount + 1);
                 setTimeout(() => window.location.reload(true), 800);
             }, { once: true });
         };
 
         if (reg.waiting) {
-            // Update already downloaded and waiting — apply immediately
             skipAndReload(reg.waiting);
             return;
         }
 
-        // No update ready yet — trigger download and wait for it
-        // Use updatefound which fires as soon as installing SW appears
         reg.addEventListener('updatefound', () => {
             const newSW = reg.installing;
             if (!newSW) return;
@@ -119,11 +114,9 @@
                 if (newSW.state === 'installed') {
                     newSW.removeEventListener('statechange', handler);
                     if (navigator.serviceWorker.controller) {
-                        // There is an existing controller — this is a real update
                         skipAndReload(newSW);
                     } else {
-                        // First install, not an update
-                        showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
+                        showUpdateToast('✅ تم التثبيت بنجاح!', 'green', 5000);
                         if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
                     }
                 } else if (newSW.state === 'redundant') {
@@ -136,7 +129,6 @@
 
         await reg.update();
 
-        // Fallback — if updatefound never fires, no update exists on server
         setTimeout(() => {
             if (!reg.waiting && !reg.installing) {
                 showUpdateToast('✅ التطبيق محدث بالفعل', 'green', 4000);
@@ -145,7 +137,6 @@
         }, 8000);
 
     } catch(e) {
-        sessionStorage.removeItem('updateReloadCount');
         showUpdateToast('❌ فشل التحديث. حاول مجدداً', 'red', 5000);
         if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
     }
