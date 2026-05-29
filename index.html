@@ -5413,6 +5413,7 @@ self.onmessage = async function(e) {
 
         function showHome() {
             currentSection = 'home';
+            document.getElementById('mainContent')?.scrollTo(0,0);
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             document.querySelector('.nav-item')?.classList.add('active');
             document.getElementById('mnHome')?.classList.add('active');
@@ -5501,13 +5502,15 @@ self.onmessage = async function(e) {
         function showSection(key) {
             if (key === 'home') { showHome(); return; }
             if (key === 'summary') {
-    currentSection = 'summary';
-    document.getElementById('mainContent').scrollTo({ top: 0, behavior: 'smooth' });
-    buildSidebarNav();
-    renderSummary();
-    return;}
+                currentSection = 'summary';
+                document.getElementById('mainContent')?.scrollTo(0,0);
+                buildSidebarNav();
+                renderSummary();
+                return;
+            }
 
             currentSection = key;
+            document.getElementById('mainContent')?.scrollTo(0,0);
             buildSidebarNav();
             document.getElementById('mnHome')?.classList.remove('active');
             document.getElementById('mnSummary')?.classList.remove('active');
@@ -6488,6 +6491,7 @@ async function importExcelWithOptions(file, importMode = 'new') {
 
 function showReportsManager() {
     currentSection = 'reports';
+    document.getElementById('mainContent')?.scrollTo(0,0);
     document.getElementById('mnHome')?.classList.remove('active');
     document.getElementById('mnSummary')?.classList.remove('active');
     if (document.getElementById('mnReports')) {
@@ -7003,6 +7007,7 @@ function escapeHtml(str) {
 }
         async function showAnalysis() {
             currentSection = 'analysis';
+            document.getElementById('mainContent')?.scrollTo(0,0);
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             const analysisNav = document.getElementById('nav-analysis');
             if (analysisNav) analysisNav.classList.add('active');
