@@ -11,39 +11,170 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
+    // ── Service Worker: register only, NO auto-update ──────────────────
+    window._swReg = null;
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js').then(reg => {
-                console.log('Service Worker registered successfully');
-                
-                // Check for updates every 60 seconds
-                setInterval(() => {
-                    reg.update();
-                }, 60000);
-                
-                // Handle controller change (new SW takes over)
-                let refreshing = false;
-                navigator.serviceWorker.addEventListener('controllerchange', () => {
-                    if (!refreshing) {
-                        refreshing = true;
-                        console.log('New Service Worker activated, reloading...');
-                        // Use alert which always works
-                        alert('🔄 تم تحديث التطبيق! سيتم إعادة التحميل الآن');
-                        window.location.reload();
-                    }
-                });
-                
-                // Check if there's a waiting service worker
-                if (reg.waiting) {
-                    console.log('Found waiting service worker');
-                    reg.waiting.postMessage({type: 'SKIP_WAITING'});
-                }
-                
+                window._swReg = reg;
+                // Do NOT auto-call reg.update() or postMessage SKIP_WAITING
+                // User must press the update button manually
             }).catch(err => {
                 console.log('Service Worker registration failed:', err);
             });
         });
+    }
+
+    // ── Manual update checker ───────────────────────────────────────────
+    // Compares CACHE_NAME in the live sw.js on GitHub with the currently
+    // active SW.  If they differ, an update is available.
+    const CURRENT_SW_URL = './sw.js';
+
+    async function checkForUpdate() {
+        const btn = document.getElementById('updateCheckBtn');
+        if (btn) { btn.disabled = true; btn.textContent = '🔄 جارى الفحص...'; }
+
+        try {
+            // 1. Fetch the live sw.js (bypass cache)
+            const res = await fetch(CURRENT_SW_URL + '?_=' + Date.now(), { cache: 'no-store' });
+            if (!res.ok) throw new Error('network');
+            const text = await res.text();
+
+            // 2. Extract CACHE_NAME from the fetched sw.js
+            const remoteMatch = text.match(/const CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
+            if (!remoteMatch) throw new Error('parse');
+            const remoteCacheName = remoteMatch[1];
+
+            // 3. Ask the active SW for its CACHE_NAME via MessageChannel
+            let localCacheName = null;
+            if (window._swReg && navigator.serviceWorker.controller) {
+                localCacheName = await new Promise((resolve) => {
+                    const mc = new MessageChannel();
+                    const timer = setTimeout(() => resolve(null), 3000);
+                    mc.port1.onmessage = (e) => {
+                        clearTimeout(timer);
+                        resolve(e.data && e.data.cacheName ? e.data.cacheName : null);
+                    };
+                    navigator.serviceWorker.controller.postMessage({ type: 'GET_CACHE_NAME' }, [mc.port2]);
+                });
+            }
+
+            // 4. Compare
+            if (localCacheName && remoteCacheName === localCacheName) {
+                showUpdateToast('✅ التطبيق محدّث — لا توجد تحديثات جديدة', 'green', 4000);
+                if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+                return;
+            }
+
+            // 5. Update available — ask user
+            showUpdateToast('', 'none', 0, true, remoteCacheName);
+
+        } catch (e) {
+            showUpdateToast('⚠️ تعذّر الاتصال للتحقق من التحديثات', 'orange', 4000);
+            if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+        }
+    }
+
+    async function applyUpdate() {
+        // Dismiss confirm panel
+        const panel = document.getElementById('updateConfirmPanel');
+        if (panel) panel.remove();
+        const btn = document.getElementById('updateCheckBtn');
+        if (btn) { btn.disabled = true; }
+
+        showUpdateToast('⏳ جارى التحديث... لا تغلق التطبيق', 'blue', 0);
+
+        try {
+            // Force SW to fetch new files
+            if (window._swReg) await window._swReg.update();
+
+            // Tell waiting SW to take over
+            const reg = await navigator.serviceWorker.ready;
+            if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+
+            // Listen for controller change (SW activated) then start reload chain
+            let reloadCount = 0;
+            const onController = () => {
+                reloadCount++;
+                showUpdateToast('🔄 إعادة تحميل ' + reloadCount + ' / 3 ...', 'blue', 0);
+                if (reloadCount < 3) {
+                    setTimeout(() => window.location.reload(true), 1000);
+                } else {
+                    setTimeout(() => {
+                        navigator.serviceWorker.removeEventListener('controllerchange', onController);
+                        showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
+                        if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+                    }, 800);
+                }
+            };
+            navigator.serviceWorker.addEventListener('controllerchange', onController);
+
+            // Fallback: if no controllerchange fires in 4s, do manual reload
+            setTimeout(() => {
+                navigator.serviceWorker.removeEventListener('controllerchange', onController);
+                showUpdateToast('🔄 إعادة تحميل...', 'blue', 0);
+                setTimeout(() => window.location.reload(true), 1200);
+            }, 4000);
+
+        } catch(e) {
+            showUpdateToast('❌ فشل التحديث. حاول مجدداً', 'red', 5000);
+            if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+        }
+    }
+
+    function showUpdateToast(msg, color, duration, showConfirm, remoteName) {
+        // Remove any existing update UI
+        ['updateToastBar','updateConfirmPanel'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        });
+        if (!msg && !showConfirm) return;
+
+        const colorMap = { green:'#1a8a4a', blue:'#1a6faf', orange:'#e8a020', red:'#c0392b', none:'' };
+        const bg = colorMap[color] || '#1a6faf';
+
+        if (showConfirm) {
+            // Confirmation panel
+            const panel = document.createElement('div');
+            panel.id = 'updateConfirmPanel';
+            panel.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);' +
+                'background:#fff;border:2px solid #1a6faf;border-radius:14px;padding:18px 20px;' +
+                'z-index:9999;box-shadow:0 4px 24px rgba(0,0,0,0.18);min-width:280px;max-width:340px;' +
+                'text-align:center;direction:rtl;font-family:inherit;';
+            panel.innerHTML =
+                '<div style="font-size:22px;margin-bottom:6px;">🆕</div>' +
+                '<div style="font-weight:700;color:#1a2533;margin-bottom:4px;">يوجد تحديث جديد</div>' +
+                '<div style="font-size:12px;color:#5a6a7e;margin-bottom:14px;">' +
+                    (remoteName ? 'الإصدار الجديد: <b>' + remoteName + '</b>' : '') +
+                '</div>' +
+                '<div style="display:flex;gap:10px;justify-content:center;">' +
+                    '<button onclick="applyUpdate()" style="background:#1a6faf;color:#fff;border:none;' +
+                        'border-radius:8px;padding:9px 20px;font-size:14px;font-family:inherit;cursor:pointer;font-weight:600;">' +
+                        '✅ تحديث الآن</button>' +
+                    '<button onclick="document.getElementById(\'updateConfirmPanel\').remove();' +
+                        'document.getElementById(\'updateCheckBtn\').disabled=false;' +
+                        'document.getElementById(\'updateCheckBtn\').textContent=\'🔔 تحقق من التحديثات\';" ' +
+                        'style="background:#f0f4f8;color:#1a2533;border:1px solid #d4dde8;' +
+                        'border-radius:8px;padding:9px 20px;font-size:14px;font-family:inherit;cursor:pointer;">' +
+                        '⏭️ لاحقاً</button>' +
+                '</div>';
+            document.body.appendChild(panel);
+            const btn = document.getElementById('updateCheckBtn');
+            if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+            return;
+        }
+
+        const bar = document.createElement('div');
+        bar.id = 'updateToastBar';
+        bar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
+            'background:' + bg + ';color:#fff;padding:11px 22px;border-radius:24px;' +
+            'z-index:9999;font-size:14px;font-family:inherit;direction:rtl;' +
+            'box-shadow:0 3px 16px rgba(0,0,0,0.22);white-space:nowrap;pointer-events:none;';
+        bar.textContent = msg;
+        document.body.appendChild(bar);
+        if (duration > 0) setTimeout(() => { if (bar.parentNode) bar.remove(); }, duration);
     }
 </script>
 <title>متابعة وحدات الرعاية الصحية الأولية</title>
@@ -1216,6 +1347,33 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         .qa-btn-na:hover  { background: #5a6268; }
         .qa-btn-clr { background: #dc3545; color: #fff; }
         .qa-btn-clr:hover { background: #c82333; }
+
+/* Analysis Styles */
+.analysis-filter-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.trend-chart { display: flex; gap: 12px; justify-content: center; align-items: flex-end; min-height: 200px; overflow-x: auto; padding: 20px 0; }
+.trend-bar { text-align: center; width: 50px; }
+.trend-bar-fill { width: 100%; background: var(--primary); transition: height 0.3s; border-radius: 4px 4px 0 0; }
+.trend-label { font-size: 10px; margin-top: 8px; color: var(--text-muted); }
+.trend-value { font-size: 10px; font-weight: bold; color: var(--primary); }
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; text-align: center; transition: all 0.3s ease; }
+.kpi-card:hover { border-color: var(--primary); box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+.kpi-card.highlight { background: linear-gradient(135deg, var(--primary-light) 0%, rgba(26,111,175,0.05) 100%); border-color: var(--primary); }
+.kpi-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+.kpi-value { font-size: 32px; font-weight: 900; color: var(--primary); line-height: 1; margin-bottom: 8px; }
+.kpi-unit { font-size: 14px; color: var(--text-muted); font-weight: 600; }
+.gauge-container { width: 120px; height: 120px; margin: 0 auto 12px; position: relative; display: flex; align-items: center; justify-content: center; }
+.gauge-circle { width: 100%; height: 100%; border-radius: 50%; background: conic-gradient(var(--primary) 0deg, var(--primary) var(--rotation), var(--border) var(--rotation), var(--border) 360deg); display: flex; align-items: center; justify-content: center; }
+.gauge-inner { width: 85%; height: 85%; border-radius: 50%; background: var(--surface); display: flex; align-items: center; justify-content: center; flex-direction: column; }
+.gauge-value { font-size: 24px; font-weight: 900; color: var(--primary); }
+.gauge-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; min-height: 300px; }
 </style>
 </head>
 <body>
@@ -1239,7 +1397,9 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
             <button class="hbtn hbtn-ghost hbtn-desktop" onclick="openMergeDialog()" title="دمج تقرير مفتش آخر">
                 <span class="icon-sm">🔗</span> دمج تقرير
             </button>
-          
+            <button id="updateCheckBtn" class="hbtn hbtn-ghost" onclick="checkForUpdate()" title="تحقق من وجود تحديثات">
+                <span class="icon-sm">🔔</span> <span class="hbtn-desktop">تحقق من التحديثات</span>
+            </button>
             <button class="hbtn hbtn-accent" onclick="exportExcel()">
                 <span class="icon-sm">📥</span> <span class="hbtn-desktop">Excel</span><span class="hbtn-mobile">تصدير</span>
             </button>
@@ -1288,6 +1448,14 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         <button class="mobile-nav-btn" id="mnSummary" onclick="showSection('summary')">
             <span class="mn-icon">📈</span>
             <span class="mn-label">الملخص</span>
+        </button>
+        <button class="mobile-nav-btn" id="mnReports" onclick="showReportsManager()">
+            <span class="mn-icon">📁</span>
+            <span class="mn-label">قاعدة البيانات</span>
+        </button>
+        <button class="mobile-nav-btn" id="mnAnalysis" onclick="showAnalysis()">
+            <span class="mn-icon">📊</span>
+            <span class="mn-label">تحليل البيانات</span>
         </button>
     </nav>
 
@@ -4092,6 +4260,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         let notes = {};
         let meta = { hospital: '', hospitalName: '', region: '', type: '', governorate: 'الاسكندرية', inspectors: '', dates: '', result: '' };
         let currentSection = 'home';
+        let currentReportFilters = { hospitalName: '', year: '', month: '' };
+        let currentAnalysisFilters = { hospitalName: '', governorate: '', year: '', month: '' };
 
         // ═══════════════════════════════════════
         // ZIP ENGINE FUNCTIONS
@@ -5178,6 +5348,14 @@ self.onmessage = async function(e) {
       <div class="nav-item ${currentSection === 'summary' ? 'active' : ''}" onclick="showSection('summary')">
         <div class="nav-icon">📈</div>
         <div class="nav-text"><div class="nav-title">ملخص النتائج</div></div>
+      </div>
+      <div class="nav-item ${currentSection === 'reports' ? 'active' : ''}" id="nav-reports" onclick="showReportsManager();closeSidebar()">
+        <div class="nav-icon">📁</div>
+        <div class="nav-text"><div class="nav-title">قاعدة البيانات</div><div class="nav-sub">التقارير المحفوظة</div></div>
+      </div>
+      <div class="nav-item ${currentSection === 'analysis' ? 'active' : ''}" id="nav-analysis" onclick="showAnalysis();closeSidebar()">
+        <div class="nav-icon">📊</div>
+        <div class="nav-text"><div class="nav-title">تحليل البيانات</div><div class="nav-sub">إحصائيات وتقارير</div></div>
       </div>`;
 
             FORM_DATA.forEach(sec => {
@@ -5834,6 +6012,1397 @@ self.onmessage = async function(e) {
         }
 
         // Clear every score on the current page
+        function clearPageScores() {
+            const sec = FORM_DATA.find(s => s.key === currentSection);
+            if (!sec) return;
+            let idx = 0;
+            sec.subsections.forEach(sub => {
+                sub.items.forEach(() => {
+                    const ik = `${currentSection}__${idx}`;
+                    delete scores[ik];
+                    const row = document.getElementById(`irow-${ik}`);
+                    if (row) {
+                        row.classList.remove('scored-0','scored-1','scored-2','scored-na');
+                        // Remove active class from all score buttons in this row
+                        row.querySelectorAll('.sbtn[data-score]').forEach(b => {
+                            b.classList.remove('s0','s1','s2','sna');
+                        });
+                    }
+                    idx++;
+                });
+            });
+            saveData();
+            updateSidebarScore(currentSection);
+            showToast('تم مسح إجابات الصفحة');
+        }
+
+// ═══════════════════════════════════════════════════════════════
+// INDEXEDDB DATABASE LAYER - Persistent Storage
+// ═══════════════════════════════════════════════════════════════
+// INDEXEDDB DATABASE LAYER - Persistent Storage
+// ═══════════════════════════════════════════════════════════════
+
+const DB_NAME = 'HospitalInspectionsDB';
+const DB_VERSION = 2; // Incremented version for analysis feature
+const STORE_NAME = 'inspection_reports';
+
+// Open database connection
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                // Create store with 'id' as auto-generated key
+                const store = db.createObjectStore(STORE_NAME, { 
+                    keyPath: 'id', 
+                    autoIncrement: true 
+                });
+                // Create indexes for searching
+                store.createIndex('hospitalName', 'hospitalName', { unique: false });
+                store.createIndex('inspectionDate', 'inspectionDate', { unique: false });
+                store.createIndex('savedAt', 'savedAt', { unique: false });
+                store.createIndex('totalScore', 'totalScore', { unique: false });
+                store.createIndex('governorate', 'governorate', { unique: false });
+            }
+        };
+    });
+}
+
+// Save current inspection to database
+async function saveToDatabase(recordName = null) {
+    // Get current data
+    const inspectionData = {
+        // Metadata
+        hospitalName: meta.hospitalName || '',
+        governorate: meta.governorate || 'الاسكندرية',
+        type: meta.type || '',
+        inspectors: meta.inspectors || '',
+        inspectionDate: meta.dates || '',
+        
+        // Scores and notes
+        scores: { ...scores },
+        notes: { ...notes },
+        
+        // Calculated totals
+        totalEarned: 0,
+        totalMax: 0,
+        percentage: 0,
+        
+        // Timestamps
+        savedAt: new Date().toISOString(),
+        recordName: recordName || `${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
+    };
+    
+    // Calculate totals
+    let grandEarned = 0, grandMax = 0;
+    FORM_DATA.forEach(sec => {
+        const { earned, effectiveMax } = getSectionScore(sec.key);
+        grandEarned += earned;
+        grandMax += effectiveMax;
+    });
+    inspectionData.totalEarned = grandEarned;
+    inspectionData.totalMax = grandMax;
+    inspectionData.percentage = grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0;
+    
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.add(inspectionData);
+        
+        request.onsuccess = () => {
+            showToast('✓ تم حفظ التقرير في قاعدة البيانات');
+            resolve(request.result);
+        };
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => db.close();
+    });
+}
+
+// Load inspection from database by ID
+async function loadFromDatabase(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(id);
+        
+        request.onsuccess = () => {
+            db.close();
+            if (request.result) {
+                // Restore data to current session
+                const data = request.result;
+                meta.hospitalName = data.hospitalName;
+                meta.governorate = data.governorate;
+                meta.type = data.type;
+                meta.inspectors = data.inspectors;
+                meta.dates = data.inspectionDate;
+                scores = data.scores || {};
+                notes = data.notes || {};
+                
+                updateMetaResult();
+                buildSidebarNav();
+                updateProgress();
+                showHome();
+                showToast(`✓ تم تحميل: ${data.recordName}`);
+                resolve(data);
+            } else {
+                reject(new Error('السجل غير موجود'));
+            }
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+
+// Update existing inspection by ID (replace)
+async function updateInDatabase(id) {
+    // Get current data
+    let grandEarned = 0, grandMax = 0;
+    FORM_DATA.forEach(sec => {
+        const { earned, effectiveMax } = getSectionScore(sec.key);
+        grandEarned += earned;
+        grandMax += effectiveMax;
+    });
+    
+    const inspectionData = {
+        id: id,
+        hospitalName: meta.hospitalName || '',
+        governorate: meta.governorate || 'الاسكندرية',
+        type: meta.type || '',
+        inspectors: meta.inspectors || '',
+        inspectionDate: meta.dates || '',
+        scores: { ...scores },
+        notes: { ...notes },
+        totalEarned: grandEarned,
+        totalMax: grandMax,
+        percentage: grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0,
+        savedAt: new Date().toISOString(),
+        recordName: `${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
+    };
+    
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.put(inspectionData);
+        
+        request.onsuccess = () => {
+            showToast('✓ تم تحديث التقرير');
+            resolve(request.result);
+        };
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => db.close();
+    });
+}
+
+// Get all saved reports (with pagination)
+async function getAllReports(limit = 50, offset = 0) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const index = store.index('savedAt');
+        const reports = [];
+        let count = 0;
+        
+        const request = index.openCursor(null, 'prev'); // newest first
+        
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor && count < offset + limit) {
+                if (count >= offset) {
+                    reports.push({
+                        id: cursor.value.id,
+                        recordName: cursor.value.recordName,
+                        hospitalName: cursor.value.hospitalName,
+                        inspectionDate: cursor.value.inspectionDate,
+                        totalEarned: cursor.value.totalEarned,
+                        totalMax: cursor.value.totalMax,
+                        percentage: cursor.value.percentage,
+                        savedAt: cursor.value.savedAt,
+                        governorate: cursor.value.governorate,
+                        scores: cursor.value.scores || {}
+                    });
+                }
+                count++;
+                cursor.continue();
+            } else {
+                db.close();
+                resolve(reports);
+            }
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+async function findDuplicateReport(hospitalName, inspectionDate) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const index = store.index('hospitalName');
+        const request = index.getAll(hospitalName);
+        request.onsuccess = () => {
+            const matches = request.result.filter(r => r.inspectionDate === inspectionDate);
+            db.close();
+            resolve(matches.length > 0 ? matches[0] : null);
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+// Delete report from database
+async function deleteFromDatabase(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.delete(id);
+        
+        request.onsuccess = () => {
+            showToast('✓ تم حذف التقرير');
+            resolve();
+        };
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => db.close();
+    });
+}
+
+// Search reports by criteria
+async function searchReports(criteria) {
+    const db = await openDB();
+    const allReports = await getAllReports(1000, 0);
+    db.close();
+    
+    return allReports.filter(report => {
+        if (criteria.hospitalName && !report.hospitalName.includes(criteria.hospitalName)) return false;
+        if (criteria.dateFrom && report.inspectionDate < criteria.dateFrom) return false;
+        if (criteria.dateTo && report.inspectionDate > criteria.dateTo) return false;
+        if (criteria.minPercentage && report.percentage < criteria.minPercentage) return false;
+        return true;
+    });
+}
+
+// Import Excel with conflict resolution
+async function importExcelWithOptions(file, importMode = 'new') {
+    // Mode: 'new' = add as new record, 'replace' = replace current, 'merge' = merge into current
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const files = await zipRead(buf);
+    const sheet = new TextDecoder().decode(files['xl/worksheets/sheet1.xml']);
+    const ss_xml = new TextDecoder().decode(files['xl/sharedStrings.xml']);
+    
+    // Parse shared strings safely (indexOf, no backtracking)
+    const ssItems = [];
+    {
+        const _o = '<si>', _c = '</si>';
+        let _p = 0;
+        while (true) {
+            const _s = ss_xml.indexOf(_o, _p); if (_s === -1) break;
+            const _e = ss_xml.indexOf(_c, _s + _o.length); if (_e === -1) break;
+            const _inn = ss_xml.slice(_s + _o.length, _e);
+            let _txt = '', _tp = 0;
+            while (true) {
+                const _ts = _inn.indexOf('<t', _tp); if (_ts === -1) break;
+                const _te = _inn.indexOf('>', _ts); if (_te === -1) break;
+                const _tc = _inn.indexOf('</t>', _te); if (_tc === -1) break;
+                _txt += _inn.slice(_te + 1, _tc); _tp = _tc + 4;
+            }
+            ssItems.push(_txt.trim()); _p = _e + _c.length;
+        }
+    }
+
+    // Read metadata from sheet2
+    const sheet2_xml = new TextDecoder().decode(files['xl/worksheets/sheet2.xml']);
+    const readSheetCell = (sheetXml, sharedStrings, cellRef) => {
+        const _mk = 'r="' + cellRef + '"';
+        const _i = sheetXml.indexOf(_mk); if (_i === -1) return '';
+        const _cs = sheetXml.lastIndexOf('<c ', _i); if (_cs === -1) return '';
+        const _te = sheetXml.indexOf('>', _cs);
+        if (_te !== -1 && sheetXml[_te - 1] === '/') return ''; // self-closing = empty
+        const _ce = sheetXml.indexOf('</c>', _cs); if (_ce === -1) return '';
+        const _xml = sheetXml.slice(_cs, _ce + 4);
+        const _tm = _xml.match(/\bt="([^"]*)"/);
+        const _type = _tm ? _tm[1] : '';
+        const _vs = _xml.indexOf('<v>'), _ve = _xml.indexOf('</v>');
+        if (_vs === -1 || _ve === -1) return '';
+        const _raw = _xml.slice(_vs + 3, _ve).trim();
+        if (_type === 's') { const _si = parseInt(_raw); return (!isNaN(_si) && sharedStrings[_si] !== undefined) ? sharedStrings[_si] : ''; }
+        return _raw;
+    };
+    
+    const importedMeta = {
+        dates: readSheetCell(sheet2_xml, ssItems, 'F1'),
+        hospitalName: readSheetCell(sheet2_xml, ssItems, 'D2'),
+        inspectors: readSheetCell(sheet2_xml, ssItems, 'F2'),
+        type: readSheetCell(sheet2_xml, ssItems, 'D3')
+    };
+    
+    // Read scores — row-index, no regex on full XML
+    const importedScores = {};
+    const importedNotes = {};
+    const _rowIdx = {};
+    { let _p = 0;
+      while (true) {
+        const _rs = sheet.indexOf('<row ', _p); if (_rs === -1) break;
+        const _re = sheet.indexOf('</row>', _rs); if (_re === -1) break;
+        const _rx = sheet.slice(_rs, _re + 6);
+        const _rm = _rx.match(/\br="(\d+)"/);
+        if (_rm) _rowIdx[parseInt(_rm[1])] = _rx;
+        _p = _re + 6;
+      }
+    }
+    const _readCell = (rowXml, col, rowNum) => {
+        const _ref = col + rowNum;
+        const _ci = rowXml.indexOf('r="' + _ref + '"'); if (_ci === -1) return null;
+        const _cs = rowXml.lastIndexOf('<c ', _ci); if (_cs === -1) return null;
+        const _te = rowXml.indexOf('>', _cs);
+        if (_te !== -1 && rowXml[_te - 1] === '/') return null;
+        const _ce = rowXml.indexOf('</c>', _cs); if (_ce === -1) return null;
+        const _xml = rowXml.slice(_cs, _ce + 4);
+        const _tm = _xml.match(/\bt="([^"]*)"/);
+        const _type = _tm ? _tm[1] : '';
+        const _vs = _xml.indexOf('<v>'), _ve = _xml.indexOf('</v>');
+        if (_vs === -1 || _ve === -1) return null;
+        const _raw = _xml.slice(_vs + 3, _ve).trim();
+        if (_type === 's') { const _si = parseInt(_raw); return (!isNaN(_si) && ssItems[_si] !== undefined) ? ssItems[_si] : _raw; }
+        return _raw;
+    };
+    FORM_DATA.forEach(sec => {
+        let idx = 0;
+        sec.subsections.forEach(sub => sub.items.forEach(() => {
+            const mapKey = sec.key + '__' + idx;
+            const exRow = ROW_MAP[mapKey];
+            if (exRow) {
+                const rowXml = _rowIdx[exRow];
+                if (rowXml) {
+                    const cVal = _readCell(rowXml, 'C', exRow);
+                    if (cVal !== null) {
+                        const v = cVal.trim();
+                        if (v === 'N/A') importedScores[mapKey] = 'N/A';
+                        else if (v === '0' || v === '0.0') importedScores[mapKey] = 0;
+                        else if (v === '1' || v === '1.0') importedScores[mapKey] = 1;
+                        else if (v === '2' || v === '2.0') importedScores[mapKey] = 2;
+                    }
+                    const dVal = _readCell(rowXml, 'D', exRow);
+                    if (dVal && dVal.trim()) importedNotes[mapKey] = dVal.trim();
+                }
+            }
+            idx++;
+        }));
+    });
+    
+    if (importMode === 'replace') {
+        // Replace current session with imported data
+        meta.hospitalName = importedMeta.hospitalName;
+        meta.dates = importedMeta.dates;
+        meta.inspectors = importedMeta.inspectors;
+        meta.type = importedMeta.type;
+        scores = importedScores;
+        notes = importedNotes;
+        updateMetaResult();
+        saveToLocal();
+        buildSidebarNav();
+        updateProgress();
+        showHome();
+        // Ensure imported hospital name appears in dropdown
+        if (meta.hospitalName) {
+            const hnSel = document.getElementById('hospitalName');
+            if (hnSel) {
+                const exists = Array.from(hnSel.options).some(o => o.value === meta.hospitalName);
+                if (!exists) { const opt = document.createElement('option'); opt.value = meta.hospitalName; opt.textContent = meta.hospitalName; hnSel.appendChild(opt); }
+                hnSel.value = meta.hospitalName;
+            }
+        }
+        showToast('✓ تم استبدال البيانات الحالية');
+    } else if (importMode === 'merge') {
+        // Merge: keep existing scores, only fill empty ones
+        Object.keys(importedScores).forEach(k => {
+            if (scores[k] === undefined) {
+                scores[k] = importedScores[k];
+            }
+        });
+        Object.keys(importedNotes).forEach(k => {
+            if (!notes[k] && importedNotes[k]) {
+                notes[k] = importedNotes[k];
+            }
+        });
+        updateMetaResult();
+        saveToLocal();
+        buildSidebarNav();
+        updateProgress();
+        showHome();
+        showToast('✓ تم دمج البيانات الجديدة');
+    } else { // 'new' - save as new record
+        // Save to database as new record
+        const tempMeta = { ...meta };
+        const tempScores = { ...scores };
+        const tempNotes = { ...notes };
+        
+        meta.hospitalName = importedMeta.hospitalName;
+        meta.dates = importedMeta.dates;
+        meta.inspectors = importedMeta.inspectors;
+        meta.type = importedMeta.type;
+        scores = importedScores;
+        notes = importedNotes;
+        
+        await saveToDatabase();
+        
+        // Restore original
+        meta = tempMeta;
+        scores = tempScores;
+        notes = tempNotes;
+        updateMetaResult();
+        showToast('✓ تم استيراد التقرير كسجل جديد');
+    }
+    
+    return { importedMeta, importedScores, importedNotes };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// REPORTS MANAGEMENT UI
+// ─────────────────────────────────────────────────────────────────
+
+function showReportsManager() {
+    currentSection = 'reports';
+    document.getElementById('mnHome')?.classList.remove('active');
+    document.getElementById('mnSummary')?.classList.remove('active');
+    if (document.getElementById('mnReports')) {
+        document.getElementById('mnReports').classList.add('active');
+    }
+    renderReportsList(currentReportFilters);
+}
+function getMonthName(month) {
+    const names = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+    return names[month-1];
+}
+async function renderReportsList(filters = { hospitalName: '', year: '', month: '' }) {
+    // Store the current filters globally (so we can reuse them after delete/export)
+    currentReportFilters = filters;
+    
+    const allReports = await getAllReports();
+    
+    // ─── Extract unique values for dropdowns ───────────────────────────
+    const hospitalsSet = new Set();
+    const yearsSet = new Set();
+    const monthsSet = new Set();
+    
+    allReports.forEach(report => {
+        if (report.hospitalName && report.hospitalName.trim()) {
+            hospitalsSet.add(report.hospitalName.trim());
+        }
+        const dateStr = report.inspectionDate;
+        if (dateStr) {
+            let year = null, month = null;
+            // Try ISO format: YYYY-MM-DD
+            const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-\d{2}$/);
+            if (isoMatch) {
+                year = isoMatch[1];
+                month = parseInt(isoMatch[2], 10);
+            } else {
+                // Try DD/MM/YYYY
+                const dmyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+                if (dmyMatch) {
+                    year = dmyMatch[3];
+                    month = parseInt(dmyMatch[2], 10);
+                } else {
+                    // Fallback: try Date parsing
+                    const d = new Date(dateStr);
+                    if (!isNaN(d)) {
+                        year = d.getFullYear();
+                        month = d.getMonth() + 1;
+                    }
+                }
+            }
+            if (year) yearsSet.add(year);
+            if (month) monthsSet.add(month);
+        }
+    });
+    
+    const hospitalsList = Array.from(hospitalsSet).sort();
+    const yearsList = Array.from(yearsSet).sort().reverse();  // newest first
+    const monthsList = Array.from(monthsSet).sort((a,b) => a-b);
+    
+    // ─── Apply selected filters ───────────────────────────────────────
+    const filteredReports = allReports.filter(report => {
+        if (filters.hospitalName && report.hospitalName !== filters.hospitalName) return false;
+        
+        if (filters.year || filters.month) {
+            const dateStr = report.inspectionDate;
+            if (!dateStr) return false;
+            let year = null, month = null;
+            const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-\d{2}$/);
+            if (isoMatch) {
+                year = isoMatch[1];
+                month = parseInt(isoMatch[2], 10);
+            } else {
+                const dmyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+                if (dmyMatch) {
+                    year = dmyMatch[3];
+                    month = parseInt(dmyMatch[2], 10);
+                } else {
+                    const d = new Date(dateStr);
+                    if (!isNaN(d)) {
+                        year = d.getFullYear();
+                        month = d.getMonth() + 1;
+                    }
+                }
+            }
+            if (filters.year && year != filters.year) return false;
+            if (filters.month && month != filters.month) return false;
+        }
+        return true;
+    });
+    
+    // ─── Sort: by hospital name, then by date ascending ──────────────
+    filteredReports.sort((a, b) => {
+        const nameA = (a.hospitalName || '').trim();
+        const nameB = (b.hospitalName || '').trim();
+        if (nameA < nameB) return -1;
+        if (nameA > nameB) return 1;
+        // Same hospital — sort by date ascending (earlier first)
+        const toDate = str => {
+            if (!str) return 0;
+            const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (iso) return new Date(str).getTime();
+            const dmy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (dmy) return new Date(`${dmy[3]}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}`).getTime();
+            return new Date(str).getTime() || 0;
+        };
+        return toDate(a.inspectionDate) - toDate(b.inspectionDate);
+    });
+
+    // ─── Build the UI ─────────────────────────────────────────────────
+    const mainContent = document.getElementById('mainContent');
+    
+    // Helper to check if a filter is active
+    const hasActiveFilter = filters.hospitalName || filters.year || filters.month;
+    
+    const filterBarHtml = `
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:20px;">
+            <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+                <div style="flex:2; min-width:150px;">
+                    <label style="font-size:12px; font-weight:600; color:var(--primary);">المستشفى</label>
+                    <select id="filterHospital" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface2);">
+                        <option value="">الكل</option>
+                        ${hospitalsList.map(h => `<option value="${escapeHtml(h)}" ${filters.hospitalName === h ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}
+                    </select>
+                </div>
+                <div style="flex:1; min-width:120px;">
+                    <label style="font-size:12px; font-weight:600; color:var(--primary);">السنة</label>
+                    <select id="filterYear" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface2);">
+                        <option value="">الكل</option>
+                        ${yearsList.map(y => `<option value="${y}" ${filters.year == y ? 'selected' : ''}>${y}</option>`).join('')}
+                    </select>
+                </div>
+                <div style="flex:1; min-width:120px;">
+                    <label style="font-size:12px; font-weight:600; color:var(--primary);">الشهر</label>
+                    <select id="filterMonth" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface2);">
+                        <option value="">الكل</option>
+                        ${monthsList.map(m => `<option value="${m}" ${filters.month == m ? 'selected' : ''}>${getMonthName(m)}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <button class="qa-btn" id="clearFiltersBtn" style="background:var(--red); color:white;">🗑️ مسح التصفية</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (allReports.length === 0) {
+        mainContent.innerHTML = `
+            <div class="section-view">
+                <div class="section-title-bar">
+                    <div class="stb-icon">📁</div>
+                    <div class="stb-text">
+                        <h2>التقارير المحفوظة</h2>
+                        <p>لا توجد تقارير محفوظة حالياً</p>
+                    </div>
+                </div>
+                <div class="quick-actions">
+                    <button class="qa-btn" onclick="showHome()">🏠 العودة للرئيسية</button>
+                    <button class="qa-btn green" onclick="saveCurrentToDatabase()">💾 حفظ التقرير الحالي</button>
+                    <button class="qa-btn" onclick="importDatabaseFromJSON()">📂 استيراد قاعدة بيانات (JSON)</button>
+                </div>
+            </div>
+        `;
+        attachFilterEvents();
+        return;
+    }
+    
+    let reportsHtml = `
+        <div class="section-view">
+            <div class="section-title-bar">
+                <div class="stb-icon">📁</div>
+                <div class="stb-text">
+                    <h2>التقارير المحفوظة</h2>
+                    <p>${filteredReports.length} من ${allReports.length} تقرير ${hasActiveFilter ? '(نتائج التصفية)' : ''}</p>
+                </div>
+            </div>
+            ${filterBarHtml}
+            <div class="quick-actions">
+                
+                <button class="qa-btn green" onclick="saveCurrentToDatabase()">💾 حفظ الحالي</button>
+                <button class="qa-btn" onclick="exportAllReports()">📦 تصدير الكل</button>
+                <button class="qa-btn" onclick="importDatabaseFromJSON()">📂 استيراد JSON</button>
+            </div>
+            <div class="sum-grid" style="grid-template-columns:1fr;">
+    `;
+    
+    for (const report of filteredReports) {
+        const percentage = report.percentage || 0;
+        const fillColor = percentage >= 80 ? 'var(--green)' : percentage >= 50 ? 'var(--orange)' : percentage > 0 ? 'var(--red)' : 'var(--border)';
+        const dateObj = new Date(report.savedAt);
+        const savedDate = dateObj.toLocaleDateString('ar-EG');
+        
+        reportsHtml += `
+            <div class="sum-card" style="padding:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <div style="flex:1;">
+                        <div style="font-weight:800; font-size:14px; color:var(--primary);">${escapeHtml(report.recordName || 'تقرير')}</div>
+                        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                            🏥 ${escapeHtml(report.hospitalName || '—')} · 📅 ${report.inspectionDate || '—'}
+                        </div>
+                        <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">
+                            💾 حفظ: ${savedDate}
+                        </div>
+                    </div>
+                    <div style="text-align:center; min-width:80px;">
+                        <div style="font-size:22px; font-weight:900; color:var(--primary);">${report.totalEarned || 0}</div>
+                        <div style="font-size:10px; color:var(--text-muted);">من ${report.totalMax || 0}</div>
+                        <div style="font-size:14px; font-weight:700; color:${fillColor};">${percentage}%</div>
+                    </div>
+                    <div class="quick-actions" style="margin:0; width:auto; gap:6px;">
+                        <button class="qa-btn" style="min-width:70px;" onclick="loadAndViewReport(${report.id})">📂 فتح</button>
+                        <button class="qa-btn" style="min-width:70px;" onclick="exportSingleReport(${report.id})">📥 تصدير</button>
+                        <button class="qa-btn" style="min-width:70px; border-color:var(--red); color:var(--red);" onclick="confirmDeleteReport(${report.id})">🗑 حذف</button>
+                    </div>
+                </div>
+                <div class="sum-bar" style="margin-top:12px;"><div class="sum-bar-fill" style="width:${percentage}%; background:${fillColor};"></div></div>
+            </div>
+        `;
+    }
+    
+    reportsHtml += `</div></div>`;
+    mainContent.innerHTML = reportsHtml;
+    attachFilterEvents();
+}
+
+function attachFilterEvents() {
+    const hospitalSelect = document.getElementById('filterHospital');
+    const yearSelect = document.getElementById('filterYear');
+    const monthSelect = document.getElementById('filterMonth');
+    const clearBtn = document.getElementById('clearFiltersBtn');
+    
+    const doFilter = () => {
+        const hospital = hospitalSelect ? hospitalSelect.value : '';
+        const year = yearSelect ? yearSelect.value : '';
+        const month = monthSelect ? monthSelect.value : '';
+        renderReportsList({ hospitalName: hospital, year: year, month: month });
+    };
+    
+    if (hospitalSelect) hospitalSelect.onchange = doFilter;
+    if (yearSelect) yearSelect.onchange = doFilter;
+    if (monthSelect) monthSelect.onchange = doFilter;
+    if (clearBtn) {
+        clearBtn.onclick = () => {
+            if (hospitalSelect) hospitalSelect.value = '';
+            if (yearSelect) yearSelect.value = '';
+            if (monthSelect) monthSelect.value = '';
+            renderReportsList({ hospitalName: '', year: '', month: '' });
+        };
+    }
+}
+		function attachSearchEvents() {
+    const hospitalSelect = document.getElementById('searchHospitalSelect');
+    const yearSelect = document.getElementById('searchYearSelect');
+    const monthSelect = document.getElementById('searchMonthSelect');
+    const clearBtn = document.getElementById('clearSearchBtn');
+    
+    const applyFilters = () => {
+        const hospital = hospitalSelect ? hospitalSelect.value : '';
+        const year = yearSelect ? yearSelect.value : '';
+        const month = monthSelect ? monthSelect.value : '';
+        renderReportsList({ hospitalName: hospital, year: year, month: month });
+    };
+    
+    if (hospitalSelect) hospitalSelect.onchange = applyFilters;
+    if (yearSelect) yearSelect.onchange = applyFilters;
+    if (monthSelect) monthSelect.onchange = applyFilters;
+    
+    if (clearBtn) {
+        clearBtn.onclick = () => {
+            if (hospitalSelect) hospitalSelect.value = '';
+            if (yearSelect) yearSelect.value = '';
+            if (monthSelect) monthSelect.value = '';
+            renderReportsList({ hospitalName: '', year: '', month: '' });
+        };
+    }
+}
+async function loadAndViewReport(id) {
+    await loadFromDatabase(id);
+    showHome();
+}
+
+async function exportSingleReport(id) {
+    const db = await openDB();
+    const report = await new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(id);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+    db.close();
+    
+    if (report) {
+        // Temporarily swap current data with report data
+        const tempMeta = { ...meta };
+        const tempScores = { ...scores };
+        const tempNotes = { ...notes };
+        
+        meta = { ...report };
+        scores = report.scores || {};
+        notes = report.notes || {};
+        
+        await exportExcel();
+        
+        // Restore
+        meta = tempMeta;
+        scores = tempScores;
+        notes = tempNotes;
+    }
+}
+
+function confirmDeleteReport(id) {
+    openModal('حذف التقرير', 'هل أنت متأكد من حذف هذا التقرير؟ لا يمكن التراجع عن هذا الإجراء.', async () => {
+        await deleteFromDatabase(id);
+        // Re‑render the reports list while preserving current filters
+        renderReportsList(currentReportFilters);
+    });
+}
+
+async function saveCurrentToDatabase() {
+    const hospitalName = meta.hospitalName || '';
+    const inspectionDate = meta.dates || '';
+    if (!hospitalName || !inspectionDate) {
+        showToast('يرجى إدخال اسم المستشفى وتاريخ التقييم قبل الحفظ');
+        return;
+    }
+    const existing = await findDuplicateReport(hospitalName, inspectionDate);
+    if (existing) {
+        const confirmUpdate = confirm(`يوجد تقرير سابق لنفس المستشفى والتاريخ (${existing.recordName}). هل تريد استبداله؟`);
+        if (confirmUpdate) {
+            await updateInDatabase(existing.id);
+            showToast('✓ تم تحديث التقرير الموجود');
+        } else {
+            showToast('تم الإلغاء');
+        }
+    } else {
+        const recordName = prompt('أدخل اسم للتقرير (اختياري):', `${hospitalName}_${inspectionDate}`);
+        await saveToDatabase(recordName);
+    }
+    if (currentSection === 'reports') {
+        renderReportsList(currentReportFilters);
+    }
+}
+
+async function exportAllReports() {
+    const reports = await getAllReports();
+    if (reports.length === 0) {
+        showToast('لا توجد تقارير للتصدير');
+        return;
+    }
+    
+    // Create a downloadable JSON export
+    const exportData = {
+        exportedAt: new Date().toISOString(),
+        reportCount: reports.length,
+        reports: reports,
+        fullData: await Promise.all(reports.map(async (r) => {
+            const db = await openDB();
+            const full = await new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.get(r.id);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            db.close();
+            return full;
+        }))
+    };
+    
+    const jsonStr = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `all_reports_${new Date().toISOString().slice(0, 19)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`✓ تم تصدير ${reports.length} تقرير`);
+}
+// Import a JSON file containing one or more reports into IndexedDB
+async function importDatabaseFromJSON() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json, .json';
+    input.onchange = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        try {
+            showToast('⏳ جاري قراءة ملف JSON...');
+            const text = await file.text();
+            const data = JSON.parse(text);
+            
+            // Validate structure: must have fullData array
+            if (!data.fullData || !Array.isArray(data.fullData) || data.fullData.length === 0) {
+                showToast('⚠️ الملف لا يحتوي على تقارير صالحة (fullData مفقود أو فارغ)');
+                return;
+            }
+            
+            showToast(`⏳ جاري استيراد ${data.fullData.length} تقرير...`);
+            
+            let importedCount = 0;
+            let skippedCount = 0;
+            
+            for (const report of data.fullData) {
+                // Basic validation of each report
+                if (!report.hospitalName && !report.totalEarned && !report.scores) {
+                    skippedCount++;
+                    continue;
+                }
+                
+                // Remove the original id (if exists) to let IndexedDB auto‑generate a new one
+                const { id, ...cleanReport } = report;
+                
+                // Ensure required fields exist
+                const reportToSave = {
+                    ...cleanReport,
+                    savedAt: cleanReport.savedAt || new Date().toISOString(),
+                    recordName: cleanReport.recordName || `${cleanReport.hospitalName || 'تقرير'}_${cleanReport.inspectionDate || 'تاريخ غير معروف'}`
+                };
+                
+                // Add to database
+                await addReportToDatabase(reportToSave);
+                importedCount++;
+                
+                // Small yield to keep UI responsive
+                if (importedCount % 5 === 0) {
+                    await new Promise(r => setTimeout(r, 10));
+                }
+            }
+            
+            showToast(`✅ تم استيراد ${importedCount} تقرير${skippedCount ? `، تم تخطي ${skippedCount} تقرير غير صالح` : ''}`);
+            
+            // Refresh the reports list if we are currently viewing it
+            if (currentSection === 'reports') {
+                renderReportsList(currentReportFilters);
+            }
+        } catch (err) {
+            console.error('Import error:', err);
+            showToast('❌ خطأ في قراءة الملف: ' + err.message);
+        } finally {
+    input.remove();
+    // Refresh the reports list if we are currently viewing it
+    if (currentSection === 'reports') {
+        renderReportsList(currentReportFilters);
+    }
+}
+    };
+    input.click();
+}
+
+// Helper: add a single report object to IndexedDB (auto‑increment id)
+async function addReportToDatabase(reportData) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.add(reportData);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => db.close();
+    });
+}
+// Enhanced merge modal for Excel import with options
+function showEnhancedImportOptions(file) {
+    const modal = document.createElement('div');
+    modal.id = 'importOptionsModal';
+    modal.style.cssText = 'position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.5);';
+    modal.innerHTML = `
+        <div style="background:#fff; border-radius:14px; padding:24px; width:min(400px,90vw); direction:rtl;">
+            <h3 style="margin:0 0 8px 0; font-size:16px; font-weight:800;">📂 استيراد ملف Excel</h3>
+            <p style="margin:0 0 20px 0; font-size:13px; color:#666;">كيف تريد معالجة هذا الملف؟</p>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+                <button id="importNewBtn" style="padding:12px; border:1.5px solid #1a6faf; background:#e8f2fb; border-radius:8px; font-weight:700; cursor:pointer;">➕ إضافة كتقرير جديد</button>
+                <button id="importReplaceBtn" style="padding:12px; border:1.5px solid #e8a020; background:#fef3dc; border-radius:8px; font-weight:700; cursor:pointer;">🔄 استبدال البيانات الحالية</button>
+                <button id="importMergeBtn" style="padding:12px; border:1.5px solid #1a8a4a; background:#e3f5eb; border-radius:8px; font-weight:700; cursor:pointer;">🔗 دمج مع البيانات الحالية</button>
+                <button id="importCancelBtn" style="padding:12px; border:1.5px solid #ccc; background:#f5f5f5; border-radius:8px; cursor:pointer;">إلغاء</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    
+    const closeModal = () => modal.remove();
+    
+    document.getElementById('importNewBtn').onclick = async () => {
+        closeModal();
+        showToast('جاري الاستيراد كتقرير جديد...');
+        await importExcelWithOptions(file, 'new');
+    };
+    document.getElementById('importReplaceBtn').onclick = async () => {
+        closeModal();
+        showToast('جاري استبدال البيانات...');
+        await importExcelWithOptions(file, 'replace');
+    };
+    document.getElementById('importMergeBtn').onclick = async () => {
+        closeModal();
+        showToast('جاري دمج البيانات...');
+        await importExcelWithOptions(file, 'merge');
+    };
+    document.getElementById('importCancelBtn').onclick = closeModal;
+}
+
+// Override the existing file upload handler to show options
+const originalHandleFileUpload = handleFileUpload;
+window.handleFileUpload = async function(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    showEnhancedImportOptions(file);
+    event.target.value = '';
+};
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/[&<>]/g, function(m) {
+        if (m === '&') return '&amp;';
+        if (m === '<') return '&lt;';
+        if (m === '>') return '&gt;';
+        return m;
+    });
+}
+        async function showAnalysis() {
+            currentSection = 'analysis';
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            const analysisNav = document.getElementById('nav-analysis');
+            if (analysisNav) analysisNav.classList.add('active');
+            document.getElementById('mnHome')?.classList.remove('active');
+            document.getElementById('mnSummary')?.classList.remove('active');
+            document.getElementById('mnAnalysis')?.classList.add('active');
+            await renderAnalysis(currentAnalysisFilters);
+        }
+
+        function parseDate(dateStr) {
+            if (!dateStr) return null;
+            // try YYYY-MM-DD
+            let m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (m) return new Date(parseInt(m[1]), parseInt(m[2])-1, parseInt(m[3]));
+            // try DD/MM/YYYY
+            m = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (m) return new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1]));
+            // fallback
+            const d = new Date(dateStr);
+            return isNaN(d) ? null : d;
+        }
+
+   async function renderAnalysis(filters) {
+    const allReports = await getAllReports();
+    if (allReports.length === 0) {
+        document.getElementById('mainContent').innerHTML = `
+            <div class="section-view">
+                <div class="section-title-bar">
+                    <div class="stb-icon">📊</div>
+                    <div class="stb-text"><h2>تحليل البيانات</h2><p>لا توجد تقارير محفوظة للتحليل</p></div>
+                </div>
+                <div class="quick-actions"><button class="qa-btn" onclick="showHome()">🏠 الرئيسية</button></div>
+            </div>`;
+        return;
+    }
+
+    // Extract unique values for filters
+    const hospitals = [...new Set(allReports.map(r => r.hospitalName).filter(Boolean))].sort();
+    const governorates = [...new Set(allReports.map(r => r.governorate).filter(Boolean))].sort();
+    const years = [...new Set(allReports.map(r => {
+        const d = parseDate(r.inspectionDate);
+        return d ? d.getFullYear() : null;
+    }).filter(y => y))].sort((a,b)=>b-a);
+    const months = [...new Set(allReports.map(r => {
+        const d = parseDate(r.inspectionDate);
+        return d ? d.getMonth()+1 : null;
+    }).filter(m => m))].sort((a,b)=>a-b);
+
+    // Apply filters
+    let filtered = allReports.filter(r => {
+        if (filters.hospitalName && r.hospitalName !== filters.hospitalName) return false;
+        if (filters.governorate && r.governorate !== filters.governorate) return false;
+        if (filters.year || filters.month) {
+            const d = parseDate(r.inspectionDate);
+            if (!d) return false;
+            if (filters.year && d.getFullYear() != filters.year) return false;
+            if (filters.month && (d.getMonth()+1) != filters.month) return false;
+        }
+        return true;
+    });
+
+    const totalReports = allReports.length;
+    const count = filtered.length;
+    const avgPct = count ? (filtered.reduce((s,r)=>s + (r.percentage||0),0)/count).toFixed(1) : 0;
+    const avgNum = parseFloat(avgPct);
+    const gaugeColor = avgNum >= 80 ? 'var(--green)' : avgNum >= 50 ? 'var(--accent)' : 'var(--red)';
+    const gaugeLabel = avgNum >= 80 ? 'جيد' : avgNum >= 50 ? 'متوسط' : 'ضعيف';
+    const gaugeArcLen = 94.2;   // π * r (r=30)
+    const gaugeFill = (avgNum / 100) * gaugeArcLen;
+    const gaugeOffset = gaugeArcLen - gaugeFill;
+
+    const best = count ? filtered.reduce((b,r)=> (r.percentage||0) > (b.percentage||0) ? r : b, filtered[0]) : null;
+    const worst = count ? filtered.reduce((w,r)=> (r.percentage||0) < (w.percentage||0) ? r : w, filtered[0]) : null;
+
+    // Trend over time (monthly)
+    const trend = {};
+    filtered.forEach(r => {
+        const d = parseDate(r.inspectionDate);
+        if (!d) return;
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        if (!trend[key]) trend[key] = { total:0, count:0 };
+        trend[key].total += r.percentage;
+        trend[key].count++;
+    });
+    const trendLabels = Object.keys(trend).sort();
+    const trendData = trendLabels.map(k => parseFloat((trend[k].total / trend[k].count).toFixed(1)));
+    const maxTrend = Math.max(...trendData, 0);
+
+    // Hospitals performance table
+    const hospitalStats = {};
+    filtered.forEach(r => {
+        const name = r.hospitalName || '—';
+        if (!hospitalStats[name]) hospitalStats[name] = { total:0, count:0 };
+        hospitalStats[name].total += (r.percentage||0);
+        hospitalStats[name].count++;
+    });
+    const hospitalRows = Object.entries(hospitalStats)
+        .map(([name, s]) => ({ name, avg: parseFloat((s.total/s.count).toFixed(1)), count: s.count }))
+        .sort((a,b) => b.avg - a.avg)
+        .slice(0, 6)
+        .map(({ name, avg, count }) => {
+            // Mini activity bars (random heights for visual interest)
+            const actH = [14,18,12,20,16,10,22].map(h=>`<span style="display:inline-block;width:3px;height:${h}px;border-radius:1px;background:var(--primary);opacity:0.7;"></span>`).join('');
+            const dotColor = avg >= 80 ? 'var(--green)' : avg >= 50 ? 'var(--accent)' : 'var(--red)';
+            return `<tr>
+                <td style="padding:6px 5px;font-size:12px;color:var(--primary);font-weight:600;">${escapeHtml(name)}</td>
+                <td style="text-align:center;padding:6px 5px;"><div style="display:flex;align-items:flex-end;gap:1px;height:22px;justify-content:center;">${actH}</div></td>
+                <td style="text-align:center;padding:6px 5px;"><div style="display:flex;justify-content:center;align-items:center;gap:3px;"><span style="width:7px;height:7px;border-radius:50%;background:${dotColor};display:inline-block;"></span><span style="font-size:11px;font-weight:700;color:var(--text);">${count}</span></div></td>
+                <td style="text-align:center;padding:6px 5px;font-size:11px;color:var(--text-muted);">${avg}%</td>
+            </tr>`;
+        }).join('');
+
+    // Weak points: average per section
+    const sections = FORM_DATA.map(sec => sec.key);
+    const sectionScores = {};
+    sections.forEach(sec => { sectionScores[sec] = { total:0, max:0, count:0 }; });
+    filtered.forEach(r => {
+        if (!r.scores) return;
+        sections.forEach(sec => {
+            let earned = 0, maxPossible = 0;
+            let idx = 0;
+            const secObj = FORM_DATA.find(s => s.key === sec);
+            if (secObj) {
+                secObj.subsections.forEach(sub => sub.items.forEach(() => {
+                    const sc = r.scores[`${sec}__${idx}`];
+                    if (sc === 0 || sc === 1 || sc === 2) {
+                        maxPossible += 2;
+                        if (sc === 1) earned += 1;
+                        else if (sc === 2) earned += 2;
+                    }
+                    idx++;
+                }));
+                if (maxPossible > 0) {
+                    sectionScores[sec].total += earned;
+                    sectionScores[sec].max += maxPossible;
+                    sectionScores[sec].count++;
+                }
+            }
+        });
+    });
+    const sortedSections = sections
+        .map(sec => {
+            const t = sectionScores[sec];
+            const pct = t.count && t.max ? parseFloat((t.total / t.max * 100).toFixed(1)) : 0;
+            return { key: sec, title: FORM_DATA.find(s=>s.key===sec)?.title || sec, pct };
+        })
+        .sort((a,b) => a.pct - b.pct);
+    const weakRows = sortedSections.map(({ title, pct }) => {
+        const fillColor = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--accent)' : pct > 0 ? 'var(--red)' : 'var(--border)';
+        const badge = pct >= 80 ? '<span style="background:var(--green-light);color:var(--green);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">جيد</span>'
+                    : pct >= 50 ? '<span style="background:#fff3cd;color:#856404;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">متوسط</span>'
+                    : pct > 0 ? '<span style="background:var(--red-light);color:var(--red);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">ضعيف</span>'
+                    : '<span style="background:var(--border-light);color:var(--text-dim);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">لا بيانات</span>';
+        return `<div class="sum-card" style="margin-bottom:8px; cursor:default;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <div class="sum-card-title" style="margin-bottom:0;">${escapeHtml(title)}</div>
+                ${badge}
+            </div>
+            <div class="sum-bar"><div class="sum-bar-fill" style="width:${pct}%; background:${fillColor}"></div></div>
+            <div class="sum-scores"><span class="sum-earned">${pct}%</span><span class="sum-max">متوسط النسبة</span></div>
+        </div>`;
+    }).join('');
+
+    // Donut chart data: count of sections by performance level
+    const sectionPcts = sortedSections.map(s=>s.pct);
+    const good = sectionPcts.filter(p=>p>=80).length;
+    const mid  = sectionPcts.filter(p=>p>=50 && p<80).length;
+    const bad  = sectionPcts.filter(p=>p>0 && p<50).length;
+    const none = sectionPcts.filter(p=>p===0).length;
+
+    // Build filter bar HTML
+    const filterHtml = `
+        <div class="analysis-filter-bar">
+            <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+                <select id="analysisHospital" style="flex:1; min-width:140px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:'Cairo',sans-serif; font-size:13px;">
+                    <option value="">🏥 كل المستشفيات</option>
+                    ${hospitals.map(h=>`<option value="${escapeHtml(h)}" ${filters.hospitalName===h?'selected':''}>${escapeHtml(h)}</option>`).join('')}
+                </select>
+                <select id="analysisYear" style="flex:1; min-width:110px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:'Cairo',sans-serif; font-size:13px;">
+                    <option value="">📅 كل السنوات</option>
+                    ${years.map(y=>`<option value="${y}" ${filters.year==y?'selected':''}>${y}</option>`).join('')}
+                </select>
+                <select id="analysisMonth" style="flex:1; min-width:110px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:'Cairo',sans-serif; font-size:13px;">
+                    <option value="">🗓️ كل الشهور</option>
+                    ${months.map(m=>`<option value="${m}" ${filters.month==m?'selected':''}>${getMonthName(m)}</option>`).join('')}
+                </select>
+                <button class="qa-btn" id="applyAnalysisFilters" style="background:var(--primary); color:white; min-width:90px;">🔍 تطبيق</button>
+                <button class="qa-btn" id="resetAnalysisFilters" style="min-width:90px;">🗑️ إعادة تعيين</button>
+            </div>
+        </div>
+    `;
+
+    const html = `
+        <div class="section-view">
+            <div class="section-title-bar">
+                <div class="stb-icon">📊</div>
+                <div class="stb-text"><h2>تحليل البيانات</h2><p>${count} تقرير مطابق للفلترة من أصل ${totalReports}</p></div>
+                
+            </div>
+
+            ${filterHtml}
+
+            <!-- KPI Cards -->
+            <div class="dashboard-grid">
+                <div class="kpi-card" style="padding:16px 20px 20px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                        <span style="font-size:13px;font-weight:700;color:var(--text);">متوسط الامتثال</span>
+                        <span style="font-size:14px;color:var(--primary);cursor:default;">✏️</span>
+                    </div>
+                    <div style="position:relative;width:160px;height:88px;margin:0 auto 14px;">
+                        <svg width="160" height="88" viewBox="0 0 160 88" style="display:block;">
+                            <path d="M14 84 A66 66 0 0 1 146 84" fill="none" stroke="var(--border)" stroke-width="14" stroke-linecap="round"/>
+                            <path d="M14 84 A66 66 0 0 1 146 84" fill="none" stroke="${gaugeColor}" stroke-width="14" stroke-linecap="round"
+                                stroke-dasharray="207.3" stroke-dashoffset="${((1 - avgNum/100) * 207.3).toFixed(2)}"/>
+                        </svg>
+                        <div style="position:absolute;bottom:4px;left:0;right:0;text-align:center;">
+                            <div style="font-size:26px;font-weight:900;color:var(--text);line-height:1;">${avgPct}%</div>
+                        </div>
+                    </div>
+                    <div style="text-align:center;">
+                        <span style="background:${avgNum>=80?'var(--green-light)':avgNum>=50?'#fff3cd':'var(--red-light)'};color:${avgNum>=80?'var(--green)':avgNum>=50?'#856404':'var(--red)'};font-size:11px;font-weight:700;padding:3px 16px;border-radius:20px;">${gaugeLabel}</span>
+                    </div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-label">🏆 الأفضل أداءً</div>
+                    <div class="kpi-value">${best ? best.percentage : 0}%</div>
+                    <div class="kpi-unit">${best ? escapeHtml(best.hospitalName) : '—'}</div>
+                    ${best && best.inspectionDate ? (() => { const d = parseDate(best.inspectionDate); return d ? `<div style="font-size:10px;color:var(--text-dim);margin-top:4px;">${getMonthName(d.getMonth()+1)} ${d.getFullYear()}</div>` : ''; })() : ''}
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-label">⚠️ يحتاج تحسين</div>
+                    <div class="kpi-value">${worst ? worst.percentage : 0}%</div>
+                    <div class="kpi-unit">${worst ? escapeHtml(worst.hospitalName) : '—'}</div>
+                    ${worst && worst.inspectionDate ? (() => { const d = parseDate(worst.inspectionDate); return d ? `<div style="font-size:10px;color:var(--text-dim);margin-top:4px;">${getMonthName(d.getMonth()+1)} ${d.getFullYear()}</div>` : ''; })() : ''}
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-label">📋 عدد التقارير</div>
+                    <div class="kpi-value">${count}</div>
+                    <div class="kpi-unit">من إجمالي ${totalReports}</div>
+                </div>
+            </div>
+
+            <!-- Trend Chart -->
+            <div class="section-title-bar" style="margin-top:4px;">
+                <div class="stb-icon" style="font-size:16px;">📈</div>
+                <div class="stb-text"><h3 style="font-size:14px;">الاتجاه الزمني للامتثال (شهرياً)</h3></div>
+            </div>
+            <div class="sum-card" style="cursor:default; padding:16px; margin-bottom:16px;">
+                ${trendData.length > 0 ? `
+                <div style="position:relative; width:100%; height:200px;">
+                    <canvas id="analysisTrendChart" role="img" aria-label="رسم بياني للاتجاه الزمني لمتوسط الامتثال شهرياً">بيانات الاتجاه الزمني</canvas>
+                </div>` : `<div style="text-align:center;padding:40px;color:var(--text-muted);">لا توجد بيانات كافية للاتجاه الزمني</div>`}
+            </div>
+
+            <!-- Two columns: Hospitals table + Donut chart -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+                <!-- Hospitals performance table -->
+                <div>
+                    <div class="section-title-bar" style="margin-bottom:10px; padding:12px 16px;">
+                        <div class="stb-icon" style="font-size:14px; width:34px; height:34px;">🏥</div>
+                        <div class="stb-text"><h3 style="font-size:13px;">أداء المستشفيات</h3></div>
+                    </div>
+                    <div class="sum-card" style="cursor:default; padding:0;">
+                        <table style="width:100%; border-collapse:collapse;">
+                            <thead>
+                                <tr style="border-bottom:1px solid var(--border);">
+                                    <th style="text-align:right;padding:8px 10px;font-size:11px;color:var(--text-muted);font-weight:600;">المستشفى</th>
+                                    <th style="text-align:center;padding:8px 5px;font-size:11px;color:var(--text-muted);font-weight:600;">نشاط</th>
+                                    <th style="text-align:center;padding:8px 5px;font-size:11px;color:var(--text-muted);font-weight:600;">عدد</th>
+                                    <th style="text-align:center;padding:8px 5px;font-size:11px;color:var(--text-muted);font-weight:600;">متوسط</th>
+                                </tr>
+                            </thead>
+                            <tbody>${hospitalRows || '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted);">لا توجد بيانات</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Donut Chart -->
+                <div>
+                    <div class="section-title-bar" style="margin-bottom:10px; padding:12px 16px;">
+                        <div class="stb-icon" style="font-size:14px; width:34px; height:34px;">🍩</div>
+                        <div class="stb-text"><h3 style="font-size:13px;">توزيع الأداء</h3></div>
+                    </div>
+                    <div class="sum-card" style="cursor:default; padding:16px;">
+                        <div style="position:relative; width:100%; height:180px;">
+                            <canvas id="analysisDonutChart" role="img" aria-label="رسم دائري لتوزيع أداء الأقسام">توزيع أداء الأقسام</canvas>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;justify-content:center;">
+                            <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);"><span style="width:10px;height:10px;border-radius:2px;background:#1a8a4a;display:inline-block;"></span>جيد ≥80%</span>
+                            <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);"><span style="width:10px;height:10px;border-radius:2px;background:#e8a020;display:inline-block;"></span>متوسط 50-79%</span>
+                            <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);"><span style="width:10px;height:10px;border-radius:2px;background:#c0392b;display:inline-block;"></span>ضعيف <50%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Weak Points -->
+            <div class="section-title-bar" style="margin-top:4px;">
+                <div class="stb-icon" style="font-size:16px;">⚠️</div>
+                <div class="stb-text"><h3 style="font-size:14px;">نقاط الضعف — الأقسام مرتبةً من الأضعف</h3></div>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px;">
+                ${weakRows}
+            </div>
+        </div>
+
+    `;   // end html template literal
+
+    document.getElementById('mainContent').innerHTML = html;
+
+    // Attach filter events
+    document.getElementById('applyAnalysisFilters').onclick = () => {
+        currentAnalysisFilters = {
+            hospitalName: document.getElementById('analysisHospital').value,
+            governorate: document.getElementById('analysisGovernorate')?.value || '',
+            year: document.getElementById('analysisYear').value,
+            month: document.getElementById('analysisMonth').value
+        };
+        renderAnalysis(currentAnalysisFilters);
+    };
+    document.getElementById('resetAnalysisFilters').onclick = () => {
+        currentAnalysisFilters = { hospitalName: '', governorate: '', year: '', month: '' };
+        renderAnalysis(currentAnalysisFilters);
+    };
+
+    // Charts must run after innerHTML — scripts inside innerHTML are never executed by browsers
+    const _tl = trendLabels.slice();
+    const _td = trendData.slice();
+    const _g = good, _m = mid, _b = bad, _n = none;
+
+    function _drawCharts() {
+        var tc = document.getElementById('analysisTrendChart');
+        if (tc && _td.length > 0) {
+            new Chart(tc, {
+                type: 'line',
+                data: {
+                    labels: _tl,
+                    datasets: [{ label: 'متوسط الامتثال', data: _td, borderColor: '#1a6faf', backgroundColor: 'rgba(26,111,175,0.08)', borderWidth: 2, fill: true, tension: 0.4, pointBackgroundColor: '#1a6faf', pointRadius: 4 }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y + '%'; } } } },
+                    scales: {
+                        x: { ticks: { font: { family: 'Cairo, sans-serif', size: 11 }, color: '#5a6a7e', maxRotation: 45 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+                        y: { min: 0, max: 100, ticks: { font: { family: 'Cairo, sans-serif', size: 11 }, color: '#5a6a7e', callback: function(v) { return v + '%'; } }, grid: { color: 'rgba(0,0,0,0.05)' } }
+                    }
+                }
+            });
+        }
+        var dc = document.getElementById('analysisDonutChart');
+        if (dc) {
+            var dd = [_g, _m, _b];
+            var dl = ['جيد', 'متوسط', 'ضعيف'];
+            var dc2 = ['#1a8a4a', '#e8a020', '#c0392b'];
+            if (_n > 0) { dd.push(_n); dl.push('بلا بيانات'); dc2.push('#d4dde8'); }
+            new Chart(dc, {
+                type: 'doughnut',
+                data: { labels: dl, datasets: [{ data: dd, backgroundColor: dc2, borderWidth: 2, borderColor: '#fff' }] },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.label + ': ' + ctx.parsed + ' أقسام'; } } } } }
+            });
+        }
+    }
+
+    if (typeof Chart !== 'undefined') {
+        _drawCharts();
+    } else {
+        var _cs = document.createElement('script');
+        _cs.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js';
+        _cs.onload = _drawCharts;
+        document.head.appendChild(_cs);
+    }
+}
+
+        async function exportAnalysisToExcel() {
+            const allReports = await getAllReports();
+            let filtered = allReports.filter(r => {
+                if (currentAnalysisFilters.hospitalName && r.hospitalName !== currentAnalysisFilters.hospitalName) return false;
+                if (currentAnalysisFilters.governorate && r.governorate !== currentAnalysisFilters.governorate) return false;
+                if (currentAnalysisFilters.year || currentAnalysisFilters.month) {
+                    const d = parseDate(r.inspectionDate);
+                    if (!d) return false;
+                    if (currentAnalysisFilters.year && d.getFullYear() != currentAnalysisFilters.year) return false;
+                    if (currentAnalysisFilters.month && (d.getMonth()+1) != currentAnalysisFilters.month) return false;
+                }
+                return true;
+            });
+            let csvRows = [['اسم المستشفى', 'المحافظة', 'تاريخ التقييم', 'النسبة المئوية', 'النقاط المحققة', 'النقاط القصوى']];
+            filtered.forEach(r => {
+                csvRows.push([r.hospitalName, r.governorate, r.inspectionDate, r.percentage, r.totalEarned, r.totalMax]);
+            });
+            const csvContent = csvRows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.href = url;
+            link.setAttribute('download', 'analysis_report.csv');
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            showToast('✓ تم تصدير التحليل كملف CSV');
+        }
+
+        // ═══════════════════════════════════════
+        // UTILS
+        // ═══════════════════════════════════════
+        function esc(s) {
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
         function clearPageScores() {
             const sec = FORM_DATA.find(s => s.key === currentSection);
             if (!sec) return;
