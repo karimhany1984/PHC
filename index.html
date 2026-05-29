@@ -77,7 +77,7 @@
         }
     }
 
-  async function applyUpdate() {
+ async function applyUpdate() {
     const panel = document.getElementById('updateConfirmPanel');
     if (panel) panel.remove();
     const btn = document.getElementById('updateCheckBtn');
@@ -95,52 +95,54 @@
     try {
         const reg = await navigator.serviceWorker.ready;
 
-        // Helper: send SKIP_WAITING to whichever SW is waiting
-        const skipWaiting = (sw) => {
+        const skipAndReload = (sw) => {
             sw.postMessage({ type: 'SKIP_WAITING' });
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                sessionStorage.setItem('updateReloadCount', reloadCount + 1);
+                setTimeout(() => window.location.reload(true), 800);
+            }, { once: true });
         };
 
         if (reg.waiting) {
-            // SW already waiting — activate immediately
-            skipWaiting(reg.waiting);
-        } else {
-            // SW not yet downloaded — trigger update and wait for it
-            await reg.update();
-            if (reg.waiting) {
-                skipWaiting(reg.waiting);
-            } else if (reg.installing) {
-                // Still installing — wait until it reaches 'installed' state
-                await new Promise((resolve) => {
-                    reg.installing.addEventListener('statechange', function handler(e) {
-                        if (e.target.state === 'installed') {
-                            e.target.removeEventListener('statechange', handler);
-                            skipWaiting(e.target);
-                            resolve();
-                        } else if (e.target.state === 'redundant') {
-                            // No update was available
-                            e.target.removeEventListener('statechange', handler);
-                            resolve();
-                        }
-                    });
-                });
-            }
+            // Update already downloaded and waiting — apply immediately
+            skipAndReload(reg.waiting);
+            return;
         }
 
-        // Now listen for SW takeover and reload
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-            sessionStorage.setItem('updateReloadCount', reloadCount + 1);
-            setTimeout(() => window.location.reload(true), 800);
+        // No update ready yet — trigger download and wait for it
+        // Use updatefound which fires as soon as installing SW appears
+        reg.addEventListener('updatefound', () => {
+            const newSW = reg.installing;
+            if (!newSW) return;
+
+            newSW.addEventListener('statechange', function handler() {
+                if (newSW.state === 'installed') {
+                    newSW.removeEventListener('statechange', handler);
+                    if (navigator.serviceWorker.controller) {
+                        // There is an existing controller — this is a real update
+                        skipAndReload(newSW);
+                    } else {
+                        // First install, not an update
+                        showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
+                        if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+                    }
+                } else if (newSW.state === 'redundant') {
+                    newSW.removeEventListener('statechange', handler);
+                    showUpdateToast('⚠️ لا يوجد تحديث متاح', 'blue', 4000);
+                    if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+                }
+            });
         }, { once: true });
 
-        // Fallback — if no update was available at all
+        await reg.update();
+
+        // Fallback — if updatefound never fires, no update exists on server
         setTimeout(() => {
-            if (!sessionStorage.getItem('updateReloadCount') || 
-                parseInt(sessionStorage.getItem('updateReloadCount')) === reloadCount) {
-                sessionStorage.removeItem('updateReloadCount');
+            if (!reg.waiting && !reg.installing) {
                 showUpdateToast('✅ التطبيق محدث بالفعل', 'green', 4000);
                 if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
             }
-        }, 6000);
+        }, 8000);
 
     } catch(e) {
         sessionStorage.removeItem('updateReloadCount');
