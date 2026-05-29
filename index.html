@@ -4260,8 +4260,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         let notes = {};
         let meta = { hospital: '', hospitalName: '', region: '', type: '', governorate: 'الاسكندرية', inspectors: '', dates: '', result: '' };
         let currentSection = 'home';
-        let currentReportFilters = { hospitalName: '', year: '', month: '' };
-        let currentAnalysisFilters = { hospitalName: '', governorate: '', year: '', month: '' };
+        let currentReportFilters = { region: '', hospitalName: '', year: '', month: '' };
+        let currentAnalysisFilters = { region: '', hospitalName: '', governorate: '', year: '', month: '' };
 
         // ═══════════════════════════════════════
         // ZIP ENGINE FUNCTIONS
@@ -5081,7 +5081,7 @@ self.onmessage = async function(e) {
                             const blob = new Blob([result], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
                             const url2 = URL.createObjectURL(blob);
                             const a = document.createElement('a');
-                            const fname = (meta.hospitalName || 'وحدة') + '_' + (meta.dates || new Date().toISOString().slice(0, 10)) + '.xlsx';
+                            const fname = (meta.region ? meta.region + '_' : '') + (meta.hospitalName || 'وحدة') + '_' + (meta.dates || new Date().toISOString().slice(0, 10)) + '.xlsx';
                             a.href = url2; a.download = fname;
                             document.body.appendChild(a); a.click(); document.body.removeChild(a);
                             setTimeout(() => URL.revokeObjectURL(url2), 10000);
@@ -6079,6 +6079,7 @@ async function saveToDatabase(recordName = null) {
     const inspectionData = {
         // Metadata
         hospitalName: meta.hospitalName || '',
+        region: meta.region || '',
         governorate: meta.governorate || 'الاسكندرية',
         type: meta.type || '',
         inspectors: meta.inspectors || '',
@@ -6095,7 +6096,7 @@ async function saveToDatabase(recordName = null) {
         
         // Timestamps
         savedAt: new Date().toISOString(),
-        recordName: recordName || `${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
+        recordName: recordName || `${meta.region ? meta.region + '_' : ''}${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
     };
     
     // Calculate totals
@@ -6172,6 +6173,7 @@ async function updateInDatabase(id) {
     const inspectionData = {
         id: id,
         hospitalName: meta.hospitalName || '',
+        region: meta.region || '',
         governorate: meta.governorate || 'الاسكندرية',
         type: meta.type || '',
         inspectors: meta.inspectors || '',
@@ -6182,7 +6184,7 @@ async function updateInDatabase(id) {
         totalMax: grandMax,
         percentage: grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0,
         savedAt: new Date().toISOString(),
-        recordName: `${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
+        recordName: `${meta.region ? meta.region + '_' : ''}${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
     };
     
     const db = await openDB();
@@ -6220,6 +6222,7 @@ async function getAllReports(limit = 50, offset = 0) {
                         id: cursor.value.id,
                         recordName: cursor.value.recordName,
                         hospitalName: cursor.value.hospitalName,
+                        region: cursor.value.region || '',
                         inspectionDate: cursor.value.inspectionDate,
                         totalEarned: cursor.value.totalEarned,
                         totalMax: cursor.value.totalMax,
@@ -6478,42 +6481,34 @@ function getMonthName(month) {
     const names = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
     return names[month-1];
 }
-async function renderReportsList(filters = { hospitalName: '', year: '', month: '' }) {
+async function renderReportsList(filters = { region: '', hospitalName: '', year: '', month: '' }) {
     // Store the current filters globally (so we can reuse them after delete/export)
     currentReportFilters = filters;
     
     const allReports = await getAllReports();
     
     // ─── Extract unique values for dropdowns ───────────────────────────
-    const hospitalsSet = new Set();
+    const regionsSet = new Set();
     const yearsSet = new Set();
     const monthsSet = new Set();
     
     allReports.forEach(report => {
-        if (report.hospitalName && report.hospitalName.trim()) {
-            hospitalsSet.add(report.hospitalName.trim());
-        }
+        if (report.region && report.region.trim()) regionsSet.add(report.region.trim());
         const dateStr = report.inspectionDate;
         if (dateStr) {
             let year = null, month = null;
-            // Try ISO format: YYYY-MM-DD
             const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-\d{2}$/);
             if (isoMatch) {
                 year = isoMatch[1];
                 month = parseInt(isoMatch[2], 10);
             } else {
-                // Try DD/MM/YYYY
                 const dmyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
                 if (dmyMatch) {
                     year = dmyMatch[3];
                     month = parseInt(dmyMatch[2], 10);
                 } else {
-                    // Fallback: try Date parsing
                     const d = new Date(dateStr);
-                    if (!isNaN(d)) {
-                        year = d.getFullYear();
-                        month = d.getMonth() + 1;
-                    }
+                    if (!isNaN(d)) { year = d.getFullYear(); month = d.getMonth() + 1; }
                 }
             }
             if (year) yearsSet.add(year);
@@ -6521,34 +6516,29 @@ async function renderReportsList(filters = { hospitalName: '', year: '', month: 
         }
     });
     
-    const hospitalsList = Array.from(hospitalsSet).sort();
-    const yearsList = Array.from(yearsSet).sort().reverse();  // newest first
+    const regionsList = Array.from(regionsSet).sort();
+    // Units for the selected region filter (for cascading dropdown)
+    const unitsList = filters.region
+        ? allReports.filter(r => r.region === filters.region).map(r => r.hospitalName).filter(Boolean)
+        : allReports.map(r => r.hospitalName).filter(Boolean);
+    const unitsSet = [...new Set(unitsList)].sort();
+    const yearsList = Array.from(yearsSet).sort().reverse();
     const monthsList = Array.from(monthsSet).sort((a,b) => a-b);
     
     // ─── Apply selected filters ───────────────────────────────────────
     const filteredReports = allReports.filter(report => {
+        if (filters.region && report.region !== filters.region) return false;
         if (filters.hospitalName && report.hospitalName !== filters.hospitalName) return false;
-        
         if (filters.year || filters.month) {
             const dateStr = report.inspectionDate;
             if (!dateStr) return false;
             let year = null, month = null;
             const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-\d{2}$/);
-            if (isoMatch) {
-                year = isoMatch[1];
-                month = parseInt(isoMatch[2], 10);
-            } else {
+            if (isoMatch) { year = isoMatch[1]; month = parseInt(isoMatch[2], 10); }
+            else {
                 const dmyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-                if (dmyMatch) {
-                    year = dmyMatch[3];
-                    month = parseInt(dmyMatch[2], 10);
-                } else {
-                    const d = new Date(dateStr);
-                    if (!isNaN(d)) {
-                        year = d.getFullYear();
-                        month = d.getMonth() + 1;
-                    }
-                }
+                if (dmyMatch) { year = dmyMatch[3]; month = parseInt(dmyMatch[2], 10); }
+                else { const d = new Date(dateStr); if (!isNaN(d)) { year = d.getFullYear(); month = d.getMonth() + 1; } }
             }
             if (filters.year && year != filters.year) return false;
             if (filters.month && month != filters.month) return false;
@@ -6556,13 +6546,12 @@ async function renderReportsList(filters = { hospitalName: '', year: '', month: 
         return true;
     });
     
-    // ─── Sort: by hospital name, then by date ascending ──────────────
+    // ─── Sort: by region, then unit, then date ascending ──────────────
     filteredReports.sort((a, b) => {
-        const nameA = (a.hospitalName || '').trim();
-        const nameB = (b.hospitalName || '').trim();
-        if (nameA < nameB) return -1;
-        if (nameA > nameB) return 1;
-        // Same hospital — sort by date ascending (earlier first)
+        const regA = (a.region || '').trim(), regB = (b.region || '').trim();
+        if (regA < regB) return -1; if (regA > regB) return 1;
+        const nameA = (a.hospitalName || '').trim(), nameB = (b.hospitalName || '').trim();
+        if (nameA < nameB) return -1; if (nameA > nameB) return 1;
         const toDate = str => {
             if (!str) return 0;
             const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -6576,18 +6565,23 @@ async function renderReportsList(filters = { hospitalName: '', year: '', month: 
 
     // ─── Build the UI ─────────────────────────────────────────────────
     const mainContent = document.getElementById('mainContent');
-    
-    // Helper to check if a filter is active
-    const hasActiveFilter = filters.hospitalName || filters.year || filters.month;
+    const hasActiveFilter = filters.region || filters.hospitalName || filters.year || filters.month;
     
     const filterBarHtml = `
         <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:20px;">
             <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
-                <div style="flex:2; min-width:150px;">
-                    <label style="font-size:12px; font-weight:600; color:var(--primary);">المستشفى</label>
+                <div style="flex:1; min-width:140px;">
+                    <label style="font-size:12px; font-weight:600; color:var(--primary);">المنطقة</label>
+                    <select id="filterRegion" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface2);">
+                        <option value="">الكل</option>
+                        ${regionsList.map(r => `<option value="${escapeHtml(r)}" ${filters.region === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+                    </select>
+                </div>
+                <div style="flex:2; min-width:160px;">
+                    <label style="font-size:12px; font-weight:600; color:var(--primary);">الوحدة</label>
                     <select id="filterHospital" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface2);">
                         <option value="">الكل</option>
-                        ${hospitalsList.map(h => `<option value="${escapeHtml(h)}" ${filters.hospitalName === h ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}
+                        ${unitsSet.map(h => `<option value="${escapeHtml(h)}" ${filters.hospitalName === h ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}
                     </select>
                 </div>
                 <div style="flex:1; min-width:120px;">
@@ -6643,7 +6637,6 @@ async function renderReportsList(filters = { hospitalName: '', year: '', month: 
             </div>
             ${filterBarHtml}
             <div class="quick-actions">
-                
                 <button class="qa-btn green" onclick="saveCurrentToDatabase()">💾 حفظ الحالي</button>
                 <button class="qa-btn" onclick="exportAllReports()">📦 تصدير الكل</button>
                 <button class="qa-btn" onclick="importDatabaseFromJSON()">📂 استيراد JSON</button>
@@ -6663,7 +6656,7 @@ async function renderReportsList(filters = { hospitalName: '', year: '', month: 
                     <div style="flex:1;">
                         <div style="font-weight:800; font-size:14px; color:var(--primary);">${escapeHtml(report.recordName || 'تقرير')}</div>
                         <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-                            🏥 ${escapeHtml(report.hospitalName || '—')} · 📅 ${report.inspectionDate || '—'}
+                            📍 ${escapeHtml(report.region || '—')} · 🏥 ${escapeHtml(report.hospitalName || '—')} · 📅 ${report.inspectionDate || '—'}
                         </div>
                         <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">
                             💾 حفظ: ${savedDate}
@@ -6691,27 +6684,28 @@ async function renderReportsList(filters = { hospitalName: '', year: '', month: 
 }
 
 function attachFilterEvents() {
+    const regionSelect = document.getElementById('filterRegion');
     const hospitalSelect = document.getElementById('filterHospital');
     const yearSelect = document.getElementById('filterYear');
     const monthSelect = document.getElementById('filterMonth');
     const clearBtn = document.getElementById('clearFiltersBtn');
     
     const doFilter = () => {
+        const region = regionSelect ? regionSelect.value : '';
         const hospital = hospitalSelect ? hospitalSelect.value : '';
         const year = yearSelect ? yearSelect.value : '';
         const month = monthSelect ? monthSelect.value : '';
-        renderReportsList({ hospitalName: hospital, year: year, month: month });
+        renderReportsList({ region, hospitalName: hospital, year, month });
     };
     
+    // When region changes, re-render (which rebuilds the unit list for that region)
+    if (regionSelect) regionSelect.onchange = doFilter;
     if (hospitalSelect) hospitalSelect.onchange = doFilter;
     if (yearSelect) yearSelect.onchange = doFilter;
     if (monthSelect) monthSelect.onchange = doFilter;
     if (clearBtn) {
         clearBtn.onclick = () => {
-            if (hospitalSelect) hospitalSelect.value = '';
-            if (yearSelect) yearSelect.value = '';
-            if (monthSelect) monthSelect.value = '';
-            renderReportsList({ hospitalName: '', year: '', month: '' });
+            renderReportsList({ region: '', hospitalName: '', year: '', month: '' });
         };
     }
 }
@@ -6788,12 +6782,12 @@ async function saveCurrentToDatabase() {
     const hospitalName = meta.hospitalName || '';
     const inspectionDate = meta.dates || '';
     if (!hospitalName || !inspectionDate) {
-        showToast('يرجى إدخال اسم المستشفى وتاريخ التقييم قبل الحفظ');
+        showToast('يرجى إدخال اسم الوحدة وتاريخ التقييم قبل الحفظ');
         return;
     }
     const existing = await findDuplicateReport(hospitalName, inspectionDate);
     if (existing) {
-        const confirmUpdate = confirm(`يوجد تقرير سابق لنفس المستشفى والتاريخ (${existing.recordName}). هل تريد استبداله؟`);
+        const confirmUpdate = confirm(`يوجد تقرير سابق لنفس الوحدة والتاريخ (${existing.recordName}). هل تريد استبداله؟`);
         if (confirmUpdate) {
             await updateInDatabase(existing.id);
             showToast('✓ تم تحديث التقرير الموجود');
@@ -6801,7 +6795,8 @@ async function saveCurrentToDatabase() {
             showToast('تم الإلغاء');
         }
     } else {
-        const recordName = prompt('أدخل اسم للتقرير (اختياري):', `${hospitalName}_${inspectionDate}`);
+        const defaultName = `${meta.region ? meta.region + '_' : ''}${hospitalName}_${inspectionDate}`;
+        const recordName = prompt('أدخل اسم للتقرير (اختياري):', defaultName);
         await saveToDatabase(recordName);
     }
     if (currentSection === 'reports') {
@@ -7027,6 +7022,7 @@ function escapeHtml(str) {
     }
 
     // Extract unique values for filters
+    const regions = [...new Set(allReports.map(r => r.region).filter(Boolean))].sort();
     const hospitals = [...new Set(allReports.map(r => r.hospitalName).filter(Boolean))].sort();
     const governorates = [...new Set(allReports.map(r => r.governorate).filter(Boolean))].sort();
     const years = [...new Set(allReports.map(r => {
@@ -7038,8 +7034,14 @@ function escapeHtml(str) {
         return d ? d.getMonth()+1 : null;
     }).filter(m => m))].sort((a,b)=>a-b);
 
+    // Units scoped to selected region (for cascading dropdown)
+    const unitOptions = filters.region
+        ? [...new Set(allReports.filter(r => r.region === filters.region).map(r => r.hospitalName).filter(Boolean))].sort()
+        : hospitals;
+
     // Apply filters
     let filtered = allReports.filter(r => {
+        if (filters.region && r.region !== filters.region) return false;
         if (filters.hospitalName && r.hospitalName !== filters.hospitalName) return false;
         if (filters.governorate && r.governorate !== filters.governorate) return false;
         if (filters.year || filters.month) {
@@ -7078,20 +7080,19 @@ function escapeHtml(str) {
     const trendData = trendLabels.map(k => parseFloat((trend[k].total / trend[k].count).toFixed(1)));
     const maxTrend = Math.max(...trendData, 0);
 
-    // Hospitals performance table
+    // Units performance table
     const hospitalStats = {};
     filtered.forEach(r => {
-        const name = r.hospitalName || '—';
-        if (!hospitalStats[name]) hospitalStats[name] = { total:0, count:0 };
-        hospitalStats[name].total += (r.percentage||0);
-        hospitalStats[name].count++;
+        const key = (r.region ? r.region + ' / ' : '') + (r.hospitalName || '—');
+        if (!hospitalStats[key]) hospitalStats[key] = { total:0, count:0 };
+        hospitalStats[key].total += (r.percentage||0);
+        hospitalStats[key].count++;
     });
     const hospitalRows = Object.entries(hospitalStats)
         .map(([name, s]) => ({ name, avg: parseFloat((s.total/s.count).toFixed(1)), count: s.count }))
         .sort((a,b) => b.avg - a.avg)
         .slice(0, 6)
         .map(({ name, avg, count }) => {
-            // Mini activity bars (random heights for visual interest)
             const actH = [14,18,12,20,16,10,22].map(h=>`<span style="display:inline-block;width:3px;height:${h}px;border-radius:1px;background:var(--primary);opacity:0.7;"></span>`).join('');
             const dotColor = avg >= 80 ? 'var(--green)' : avg >= 50 ? 'var(--accent)' : 'var(--red)';
             return `<tr>
@@ -7164,9 +7165,13 @@ function escapeHtml(str) {
     const filterHtml = `
         <div class="analysis-filter-bar">
             <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+                <select id="analysisRegion" style="flex:1; min-width:130px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:'Cairo',sans-serif; font-size:13px;">
+                    <option value="">📍 كل المناطق</option>
+                    ${regions.map(r=>`<option value="${escapeHtml(r)}" ${filters.region===r?'selected':''}>${escapeHtml(r)}</option>`).join('')}
+                </select>
                 <select id="analysisHospital" style="flex:1; min-width:140px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:'Cairo',sans-serif; font-size:13px;">
-                    <option value="">🏥 كل المستشفيات</option>
-                    ${hospitals.map(h=>`<option value="${escapeHtml(h)}" ${filters.hospitalName===h?'selected':''}>${escapeHtml(h)}</option>`).join('')}
+                    <option value="">🏥 كل الوحدات</option>
+                    ${unitOptions.map(h=>`<option value="${escapeHtml(h)}" ${filters.hospitalName===h?'selected':''}>${escapeHtml(h)}</option>`).join('')}
                 </select>
                 <select id="analysisYear" style="flex:1; min-width:110px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:'Cairo',sans-serif; font-size:13px;">
                     <option value="">📅 كل السنوات</option>
@@ -7253,13 +7258,13 @@ function escapeHtml(str) {
                 <div>
                     <div class="section-title-bar" style="margin-bottom:10px; padding:12px 16px;">
                         <div class="stb-icon" style="font-size:14px; width:34px; height:34px;">🏥</div>
-                        <div class="stb-text"><h3 style="font-size:13px;">أداء المستشفيات</h3></div>
+                        <div class="stb-text"><h3 style="font-size:13px;">أداء الوحدات</h3></div>
                     </div>
                     <div class="sum-card" style="cursor:default; padding:0;">
                         <table style="width:100%; border-collapse:collapse;">
                             <thead>
                                 <tr style="border-bottom:1px solid var(--border);">
-                                    <th style="text-align:right;padding:8px 10px;font-size:11px;color:var(--text-muted);font-weight:600;">المستشفى</th>
+                                    <th style="text-align:right;padding:8px 10px;font-size:11px;color:var(--text-muted);font-weight:600;">الوحدة</th>
                                     <th style="text-align:center;padding:8px 5px;font-size:11px;color:var(--text-muted);font-weight:600;">نشاط</th>
                                     <th style="text-align:center;padding:8px 5px;font-size:11px;color:var(--text-muted);font-weight:600;">عدد</th>
                                     <th style="text-align:center;padding:8px 5px;font-size:11px;color:var(--text-muted);font-weight:600;">متوسط</th>
@@ -7306,6 +7311,7 @@ function escapeHtml(str) {
     // Attach filter events
     document.getElementById('applyAnalysisFilters').onclick = () => {
         currentAnalysisFilters = {
+            region: document.getElementById('analysisRegion')?.value || '',
             hospitalName: document.getElementById('analysisHospital').value,
             governorate: document.getElementById('analysisGovernorate')?.value || '',
             year: document.getElementById('analysisYear').value,
@@ -7314,7 +7320,7 @@ function escapeHtml(str) {
         renderAnalysis(currentAnalysisFilters);
     };
     document.getElementById('resetAnalysisFilters').onclick = () => {
-        currentAnalysisFilters = { hospitalName: '', governorate: '', year: '', month: '' };
+        currentAnalysisFilters = { region: '', hospitalName: '', governorate: '', year: '', month: '' };
         renderAnalysis(currentAnalysisFilters);
     };
 
@@ -7369,6 +7375,7 @@ function escapeHtml(str) {
         async function exportAnalysisToExcel() {
             const allReports = await getAllReports();
             let filtered = allReports.filter(r => {
+                if (currentAnalysisFilters.region && r.region !== currentAnalysisFilters.region) return false;
                 if (currentAnalysisFilters.hospitalName && r.hospitalName !== currentAnalysisFilters.hospitalName) return false;
                 if (currentAnalysisFilters.governorate && r.governorate !== currentAnalysisFilters.governorate) return false;
                 if (currentAnalysisFilters.year || currentAnalysisFilters.month) {
@@ -7379,9 +7386,9 @@ function escapeHtml(str) {
                 }
                 return true;
             });
-            let csvRows = [['اسم المستشفى', 'المحافظة', 'تاريخ التقييم', 'النسبة المئوية', 'النقاط المحققة', 'النقاط القصوى']];
+            let csvRows = [['المنطقة', 'اسم الوحدة', 'المحافظة', 'تاريخ التقييم', 'النسبة المئوية', 'النقاط المحققة', 'النقاط القصوى']];
             filtered.forEach(r => {
-                csvRows.push([r.hospitalName, r.governorate, r.inspectionDate, r.percentage, r.totalEarned, r.totalMax]);
+                csvRows.push([r.region || '', r.hospitalName, r.governorate, r.inspectionDate, r.percentage, r.totalEarned, r.totalMax]);
             });
             const csvContent = csvRows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
             const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
