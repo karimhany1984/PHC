@@ -78,51 +78,45 @@
     }
 
     async function applyUpdate() {
-        // Dismiss confirm panel
-        const panel = document.getElementById('updateConfirmPanel');
-        if (panel) panel.remove();
-        const btn = document.getElementById('updateCheckBtn');
-        if (btn) { btn.disabled = true; }
+    const panel = document.getElementById('updateConfirmPanel');
+    if (panel) panel.remove();
+    const btn = document.getElementById('updateCheckBtn');
+    if (btn) btn.disabled = true;
+    showUpdateToast('⏳ جارى التحديث... لا تغلق التطبيق', 'blue', 0);
 
-        showUpdateToast('⏳ جارى التحديث... لا تغلق التطبيق', 'blue', 0);
+    // Track reload count across page reloads
+    const reloadCount = parseInt(sessionStorage.getItem('updateReloadCount') || '0');
 
-        try {
-            // Force SW to fetch new files
-            if (window._swReg) await window._swReg.update();
-
-            // Tell waiting SW to take over
-            const reg = await navigator.serviceWorker.ready;
-            if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-
-            // Listen for controller change (SW activated) then start reload chain
-            let reloadCount = 0;
-            const onController = () => {
-                reloadCount++;
-                showUpdateToast('🔄 إعادة تحميل ' + reloadCount + ' / 3 ...', 'blue', 0);
-                if (reloadCount < 3) {
-                    setTimeout(() => window.location.reload(true), 1000);
-                } else {
-                    setTimeout(() => {
-                        navigator.serviceWorker.removeEventListener('controllerchange', onController);
-                        showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
-                        if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
-                    }, 800);
-                }
-            };
-            navigator.serviceWorker.addEventListener('controllerchange', onController);
-
-            // Fallback: if no controllerchange fires in 4s, do manual reload
-            setTimeout(() => {
-                navigator.serviceWorker.removeEventListener('controllerchange', onController);
-                showUpdateToast('🔄 إعادة تحميل...', 'blue', 0);
-                setTimeout(() => window.location.reload(true), 1200);
-            }, 4000);
-
-        } catch(e) {
-            showUpdateToast('❌ فشل التحديث. حاول مجدداً', 'red', 5000);
-            if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
-        }
+    if (reloadCount >= 2) {
+        // We've reloaded enough — done
+        sessionStorage.removeItem('updateReloadCount');
+        showUpdateToast('✅ تم التحديث بنجاح!', 'green', 5000);
+        if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+        return;
     }
+
+    try {
+        if (window._swReg) await window._swReg.update();
+        const reg = await navigator.serviceWorker.ready;
+        if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            sessionStorage.setItem('updateReloadCount', reloadCount + 1);
+            setTimeout(() => window.location.reload(true), 800);
+        }, { once: true }); // ← once:true prevents duplicate firings
+
+        // Fallback if no SW was waiting
+        setTimeout(() => {
+            sessionStorage.setItem('updateReloadCount', reloadCount + 1);
+            window.location.reload(true);
+        }, 4000);
+
+    } catch(e) {
+        sessionStorage.removeItem('updateReloadCount');
+        showUpdateToast('❌ فشل التحديث. حاول مجدداً', 'red', 5000);
+        if (btn) { btn.disabled = false; btn.textContent = '🔔 تحقق من التحديثات'; }
+    }
+}
 
     function showUpdateToast(msg, color, duration, showConfirm, remoteName) {
         // Remove any existing update UI
