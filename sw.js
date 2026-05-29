@@ -1,4 +1,4 @@
-const CACHE_NAME = 'PHC-v32-phc-v21';
+const CACHE_NAME = 'PHC-v32-phc-v22';
 const BASE = '/PHC/';  // 
 
 // Files that MUST be available offline immediately
@@ -31,7 +31,7 @@ self.addEventListener('install', e => {
             }
         })
     );
-    self.skipWaiting();
+    // Do NOT auto-skipWaiting — user must press the update button manually
 });
 
 // Activate: Clean up old cache versions
@@ -154,9 +154,9 @@ self.addEventListener('message', (event) => {
         // Reply on the MessageChannel port if provided, otherwise fall back to event.source
         const replyPort = event.ports && event.ports[0];
         if (replyPort) {
-            replyPort.postMessage({ type: 'CACHE_NAME', cacheName: CACHE_NAME });
+            replyPort.postMessage({ type: 'CACHE_NAME', cacheName: CACHE_NAME, base: BASE });
         } else if (event.source) {
-            event.source.postMessage({ type: 'CACHE_NAME', cacheName: CACHE_NAME });
+            event.source.postMessage({ type: 'CACHE_NAME', cacheName: CACHE_NAME, base: BASE });
         }
     }
 });
