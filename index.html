@@ -5623,7 +5623,7 @@ self.onmessage = async function(e) {
 
             let grandEarned = 0, grandMax = 0;
             FORM_DATA.forEach(s => { const { earned, effectiveMax } = getSectionScore(s.key); grandEarned += earned; grandMax += effectiveMax; });
-            const grandPct = grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0;
+            const grandPct = getGrandTotalPct();
             const pctColor = grandPct >= 80 ? '#27ae60' : grandPct >= 60 ? '#e8a020' : grandPct >= 40 ? '#d35400' : '#c0392b';
 
             let cardsHtml = FORM_DATA.map(sec => {
@@ -5741,6 +5741,23 @@ self.onmessage = async function(e) {
             return { earned, effectiveMax };
         }
 
+        // Grand total calculated as average of per-section percentages,
+        // skipping sections where all items are unanswered or N/A.
+        // This exactly matches the Excel formula in الاجمالي sheet:
+        // =SUM(sectionPcts) / COUNT(sectionPcts)
+        function getGrandTotalPct() {
+            const sectionPcts = [];
+            FORM_DATA.forEach(sec => {
+                const { earned, effectiveMax } = getSectionScore(sec.key);
+                if (effectiveMax > 0) {
+                    sectionPcts.push(earned / effectiveMax);
+                }
+            });
+            if (sectionPcts.length === 0) return 0;
+            const avg = sectionPcts.reduce((a, b) => a + b, 0) / sectionPcts.length;
+            return Math.round(avg * 100);
+        }
+
         function updateSectionScoreDisplay(key) {
             const sec = FORM_DATA.find(s => s.key === key);
             if (!sec) return;
@@ -5771,26 +5788,23 @@ self.onmessage = async function(e) {
             const pct = total > 0 ? (answered / total * 100) : 0;
             const f = document.getElementById('gProgressFill');
             if (f) f.style.width = `${pct}%`;
-            let grand = 0; FORM_DATA.forEach(s => { const { earned } = getSectionScore(s.key); grand += earned; });
-            const sb = document.getElementById('sbTotalScore');
-            const sbp = document.getElementById('sbTotalPct');
-            let grandMaxDyn = 0; FORM_DATA.forEach(s => { const { effectiveMax } = getSectionScore(s.key); grandMaxDyn += effectiveMax; });
-            if (sb) sb.textContent = grand;
-            if (sbp) sbp.textContent = grandMaxDyn > 0 ? `${Math.round(grand / grandMaxDyn * 100)}%` : '0%';
+            let grand = 0, grandMaxDyn = 0;
+            FORM_DATA.forEach(s => {
+                const { earned, effectiveMax } = getSectionScore(s.key);
+                grand += earned;
+                grandMaxDyn += effectiveMax;
+            });
+            const sb    = document.getElementById('sbTotalScore');
+            const sbp   = document.getElementById('sbTotalPct');
             const sbMax = document.getElementById('sbMaxScore');
+            if (sb)    sb.textContent  = grand;
+            if (sbp)   sbp.textContent = getGrandTotalPct() + '%';
             if (sbMax) sbMax.textContent = grandMaxDyn > 0 ? `/ ${grandMaxDyn} نقطة` : '/ — نقطة';
         }
 
         function updateMetaResult() {
-            let grandEarned = 0, grandMax = 0;
-            FORM_DATA.forEach(sec => {
-                const { earned, effectiveMax } = getSectionScore(sec.key);
-                grandEarned += earned;
-                grandMax += effectiveMax;
-            });
-            const pct = grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0;
+            const pct = getGrandTotalPct();
             meta.result = `${pct}%`;
-
             const resultDisplay = document.getElementById('meta-result-display');
             if (resultDisplay) resultDisplay.textContent = meta.result;
         }
@@ -6129,7 +6143,7 @@ async function saveToDatabase(recordName = null) {
     });
     inspectionData.totalEarned = grandEarned;
     inspectionData.totalMax = grandMax;
-    inspectionData.percentage = grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0;
+    inspectionData.percentage = getGrandTotalPct();
     
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -6203,7 +6217,7 @@ async function updateInDatabase(id) {
         notes: { ...notes },
         totalEarned: grandEarned,
         totalMax: grandMax,
-        percentage: grandMax > 0 ? Math.round(grandEarned / grandMax * 100) : 0,
+        percentage: getGrandTotalPct(),
         savedAt: new Date().toISOString(),
         recordName: `${meta.region ? meta.region + '_' : ''}${meta.hospitalName || 'تقرير'}_${meta.dates || new Date().toISOString().slice(0, 10)}`
     };
