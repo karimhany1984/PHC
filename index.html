@@ -6312,146 +6312,110 @@ async function searchReports(criteria) {
 
 // Import Excel with conflict resolution
 async function importExcelWithOptions(file, importMode = 'new') {
-    // Mode: 'new' = add as new record, 'replace' = replace current, 'merge' = merge into current
     const buf = new Uint8Array(await file.arrayBuffer());
     const files = await zipRead(buf);
     const sheet = new TextDecoder().decode(files['xl/worksheets/sheet1.xml']);
     const ss_xml = new TextDecoder().decode(files['xl/sharedStrings.xml']);
-    
-    // Parse shared strings safely (indexOf, no backtracking)
+    const sheet3_raw = files['xl/worksheets/sheet3.xml'];
+    const sheet2_xml = sheet3_raw ? new TextDecoder().decode(sheet3_raw) : '';
+
+    // Parse shared strings — same as handleFileUpload
     const ssItems = [];
-    {
-        const _o = '<si>', _c = '</si>';
-        let _p = 0;
-        while (true) {
-            const _s = ss_xml.indexOf(_o, _p); if (_s === -1) break;
-            const _e = ss_xml.indexOf(_c, _s + _o.length); if (_e === -1) break;
-            const _inn = ss_xml.slice(_s + _o.length, _e);
-            let _txt = '', _tp = 0;
-            while (true) {
-                const _ts = _inn.indexOf('<t', _tp); if (_ts === -1) break;
-                const _te = _inn.indexOf('>', _ts); if (_te === -1) break;
-                const _tc = _inn.indexOf('</t>', _te); if (_tc === -1) break;
-                _txt += _inn.slice(_te + 1, _tc); _tp = _tc + 4;
-            }
-            ssItems.push(_txt.trim()); _p = _e + _c.length;
+    ss_xml.replace(/<si>([\s\S]*?)<\/si>/g, (m, inner) => {
+        let txt = '';
+        inner.replace(/<t[^>]*>([^<]*)<\/t>/g, (_, t) => { txt += t; });
+        ssItems.push(txt.trim());
+    });
+
+    // Cell reader — identical logic to handleFileUpload
+    const readCell = (sheetXml, cellRef) => {
+        const re = new RegExp('<c\\s[^>]*r="' + cellRef + '"[^>]*>[\\s\\S]*?<\/c>');
+        const m = sheetXml.match(re);
+        if (!m) return null;
+        const xml = m[0];
+        const v = xml.match(/<v>([^<]*)<\/v>/);
+        if (!v) return null;
+        if (/\bt="s"/.test(xml)) {
+            const si = parseInt(v[1]);
+            return (!isNaN(si) && ssItems[si] !== undefined) ? ssItems[si] : null;
         }
+        if (/\bt="str"/.test(xml)) return v[1];
+        return v[1];
+    };
+
+    // Read metadata from sheet3 (same cells as handleFileUpload)
+    const importedMeta = {
+        dates:        sheet2_xml ? (readCell(sheet2_xml, 'F1') || '').trim() : '',
+        hospitalName: sheet2_xml ? (readCell(sheet2_xml, 'D2') || '').trim() : '',
+        inspectors:   sheet2_xml ? (readCell(sheet2_xml, 'F2') || '').trim() : '',
+        type:         sheet2_xml ? (readCell(sheet2_xml, 'D3') || '').trim() : ''
+    };
+
+    // Detect region from hospital name
+    let importedRegion = '';
+    for (const [reg, units] of Object.entries(REGION_UNITS)) {
+        if (units.includes(importedMeta.hospitalName)) { importedRegion = reg; break; }
     }
 
-    // Read metadata from sheet2
-    const sheet2_xml = new TextDecoder().decode(files['xl/worksheets/sheet2.xml']);
-    const readSheetCell = (sheetXml, sharedStrings, cellRef) => {
-        const _mk = 'r="' + cellRef + '"';
-        const _i = sheetXml.indexOf(_mk); if (_i === -1) return '';
-        const _cs = sheetXml.lastIndexOf('<c ', _i); if (_cs === -1) return '';
-        const _te = sheetXml.indexOf('>', _cs);
-        if (_te !== -1 && sheetXml[_te - 1] === '/') return ''; // self-closing = empty
-        const _ce = sheetXml.indexOf('</c>', _cs); if (_ce === -1) return '';
-        const _xml = sheetXml.slice(_cs, _ce + 4);
-        const _tm = _xml.match(/\bt="([^"]*)"/);
-        const _type = _tm ? _tm[1] : '';
-        const _vs = _xml.indexOf('<v>'), _ve = _xml.indexOf('</v>');
-        if (_vs === -1 || _ve === -1) return '';
-        const _raw = _xml.slice(_vs + 3, _ve).trim();
-        if (_type === 's') { const _si = parseInt(_raw); return (!isNaN(_si) && sharedStrings[_si] !== undefined) ? sharedStrings[_si] : ''; }
-        return _raw;
-    };
-    
-    const importedMeta = {
-        dates: readSheetCell(sheet2_xml, ssItems, 'F1'),
-        hospitalName: readSheetCell(sheet2_xml, ssItems, 'D2'),
-        inspectors: readSheetCell(sheet2_xml, ssItems, 'F2'),
-        type: readSheetCell(sheet2_xml, ssItems, 'D3')
-    };
-    
-    // Read scores — row-index, no regex on full XML
     const importedScores = {};
-    const importedNotes = {};
-    const _rowIdx = {};
-    { let _p = 0;
-      while (true) {
-        const _rs = sheet.indexOf('<row ', _p); if (_rs === -1) break;
-        const _re = sheet.indexOf('</row>', _rs); if (_re === -1) break;
-        const _rx = sheet.slice(_rs, _re + 6);
-        const _rm = _rx.match(/\br="(\d+)"/);
-        if (_rm) _rowIdx[parseInt(_rm[1])] = _rx;
-        _p = _re + 6;
-      }
-    }
-    const _readCell = (rowXml, col, rowNum) => {
-        const _ref = col + rowNum;
-        const _ci = rowXml.indexOf('r="' + _ref + '"'); if (_ci === -1) return null;
-        const _cs = rowXml.lastIndexOf('<c ', _ci); if (_cs === -1) return null;
-        const _te = rowXml.indexOf('>', _cs);
-        if (_te !== -1 && rowXml[_te - 1] === '/') return null;
-        const _ce = rowXml.indexOf('</c>', _cs); if (_ce === -1) return null;
-        const _xml = rowXml.slice(_cs, _ce + 4);
-        const _tm = _xml.match(/\bt="([^"]*)"/);
-        const _type = _tm ? _tm[1] : '';
-        const _vs = _xml.indexOf('<v>'), _ve = _xml.indexOf('</v>');
-        if (_vs === -1 || _ve === -1) return null;
-        const _raw = _xml.slice(_vs + 3, _ve).trim();
-        if (_type === 's') { const _si = parseInt(_raw); return (!isNaN(_si) && ssItems[_si] !== undefined) ? ssItems[_si] : _raw; }
-        return _raw;
-    };
+    const importedNotes  = {};
+
+    // Read scores and notes — mirrors handleFileUpload exactly
     FORM_DATA.forEach(sec => {
         let idx = 0;
         sec.subsections.forEach(sub => sub.items.forEach(() => {
             const mapKey = sec.key + '__' + idx;
-            const exRow = ROW_MAP[mapKey];
+            const exRow  = ROW_MAP[mapKey];
             if (exRow) {
-                const rowXml = _rowIdx[exRow];
-                if (rowXml) {
-                    const cVal = _readCell(rowXml, 'C', exRow);
-                    if (cVal !== null) {
-                        const v = cVal.trim();
-                        if (v === 'N/A') importedScores[mapKey] = 'N/A';
-                        else if (v === '0' || v === '0.0') importedScores[mapKey] = 0;
-                        else if (v === '1' || v === '1.0') importedScores[mapKey] = 1;
-                        else if (v === '2' || v === '2.0') importedScores[mapKey] = 2;
-                    }
-                    const dVal = _readCell(rowXml, 'D', exRow);
-                    if (dVal && dVal.trim()) importedNotes[mapKey] = dVal.trim();
+                const onSheet2 = exRow < 0;
+                const onColH   = exRow >= 20000;
+                const absRow   = onColH ? exRow - 20000 : Math.abs(exRow);
+                const sheetXml = onSheet2 ? sheet2_xml : sheet;
+
+                if (!sheetXml) { idx++; return; }
+
+                // Score column: C (sheet1/sheet2), same as handleFileUpload
+                const cVal = readCell(sheetXml, 'C' + absRow);
+                if (cVal !== null) {
+                    const v = String(cVal).trim();
+                    if (v === 'N/A')                    importedScores[mapKey] = 'N/A';
+                    else if (v === '0' || v === '0.0')  importedScores[mapKey] = 0;
+                    else if (v === '1' || v === '1.0')  importedScores[mapKey] = 1;
+                    else if (v === '2' || v === '2.0')  importedScores[mapKey] = 2;
+                }
+
+                // Note column: D
+                const dVal = readCell(sheetXml, 'D' + absRow);
+                if (dVal && String(dVal).trim()) {
+                    importedNotes[mapKey] = String(dVal).trim();
                 }
             }
             idx++;
         }));
     });
-    
+
+    // Apply based on chosen mode
     if (importMode === 'replace') {
-        // Replace current session with imported data
         meta.hospitalName = importedMeta.hospitalName;
-        meta.dates = importedMeta.dates;
-        meta.inspectors = importedMeta.inspectors;
-        meta.type = importedMeta.type;
+        meta.dates        = importedMeta.dates;
+        meta.inspectors   = importedMeta.inspectors;
+        meta.type         = importedMeta.type;
+        if (importedRegion) meta.region = importedRegion;
         scores = importedScores;
-        notes = importedNotes;
+        notes  = importedNotes;
         updateMetaResult();
         saveToLocal();
         buildSidebarNav();
         updateProgress();
         showHome();
-        // Ensure imported hospital name appears in dropdown
-        if (meta.hospitalName) {
-            const hnSel = document.getElementById('hospitalName');
-            if (hnSel) {
-                const exists = Array.from(hnSel.options).some(o => o.value === meta.hospitalName);
-                if (!exists) { const opt = document.createElement('option'); opt.value = meta.hospitalName; opt.textContent = meta.hospitalName; hnSel.appendChild(opt); }
-                hnSel.value = meta.hospitalName;
-            }
-        }
         showToast('✓ تم استبدال البيانات الحالية');
+
     } else if (importMode === 'merge') {
-        // Merge: keep existing scores, only fill empty ones
         Object.keys(importedScores).forEach(k => {
-            if (scores[k] === undefined) {
-                scores[k] = importedScores[k];
-            }
+            if (scores[k] === undefined) scores[k] = importedScores[k];
         });
         Object.keys(importedNotes).forEach(k => {
-            if (!notes[k] && importedNotes[k]) {
-                notes[k] = importedNotes[k];
-            }
+            if (!notes[k] && importedNotes[k]) notes[k] = importedNotes[k];
         });
         updateMetaResult();
         saveToLocal();
@@ -6459,29 +6423,30 @@ async function importExcelWithOptions(file, importMode = 'new') {
         updateProgress();
         showHome();
         showToast('✓ تم دمج البيانات الجديدة');
-    } else { // 'new' - save as new record
-        // Save to database as new record
-        const tempMeta = { ...meta };
+
+    } else { // 'new' — save as new database record
+        const tempMeta   = { ...meta };
         const tempScores = { ...scores };
-        const tempNotes = { ...notes };
-        
+        const tempNotes  = { ...notes };
+
         meta.hospitalName = importedMeta.hospitalName;
-        meta.dates = importedMeta.dates;
-        meta.inspectors = importedMeta.inspectors;
-        meta.type = importedMeta.type;
+        meta.dates        = importedMeta.dates;
+        meta.inspectors   = importedMeta.inspectors;
+        meta.type         = importedMeta.type;
+        if (importedRegion) meta.region = importedRegion;
         scores = importedScores;
-        notes = importedNotes;
-        
+        notes  = importedNotes;
+
         await saveToDatabase();
-        
-        // Restore original
-        meta = tempMeta;
+
+        // Restore session
+        meta   = tempMeta;
         scores = tempScores;
-        notes = tempNotes;
+        notes  = tempNotes;
         updateMetaResult();
         showToast('✓ تم استيراد التقرير كسجل جديد');
     }
-    
+
     return { importedMeta, importedScores, importedNotes };
 }
 
