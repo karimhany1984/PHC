@@ -1,4 +1,4 @@
-const CACHE_NAME = 'phc-v38';
+const CACHE_NAME = 'phc-v40';
 const BASE = '/PHC/';  // 
 
 // Files that MUST be available offline immediately
