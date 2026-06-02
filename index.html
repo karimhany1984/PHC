@@ -5299,20 +5299,15 @@ self.onmessage = async function(e) {
                         const pct = effectiveMax > 0 ? Math.round(earned / effectiveMax * 100) + '%' : '0%';
 
                       
-                        const notesList = [];
+                        
+        const notesList = [];
 let idx = 0;
 sec.subsections.forEach(sub => {
     sub.items.forEach(item => {
         const ik = `${sec.key}__${idx}`;
         const sc = scores[ik];
         const note = notes[ik];
-
-        if (sc === 0 || sc === 1) {
-            // Use user note if provided, otherwise fall back to item text
-            const content = (note && note.trim()) ? note.trim() : item.text;
-            notesList.push(content);
-        } else if (sc === 2 && note && note.trim()) {
-            // For fully-scored items, only include if user added a note
+        if (note && note.trim()) {
             notesList.push(note.trim());
         }
         idx++;
