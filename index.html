@@ -5298,21 +5298,26 @@ self.onmessage = async function(e) {
                         const { earned, effectiveMax } = getSectionScore(sec.key);
                         const pct = effectiveMax > 0 ? Math.round(earned / effectiveMax * 100) + '%' : '0%';
 
+                      
                         const notesList = [];
-                        let idx = 0;
-                        sec.subsections.forEach(sub => {
-                            sub.items.forEach(item => {
-                                const ik = `${sec.key}__${idx}`;
-                                const sc = scores[ik];
-                                const note = notes[ik];
-                                if ((sc === 0 || sc === 1) && note && note.trim()) {
-                                    notesList.push(note.trim());
-                                } else if (sc === 2 && note && note.trim()) {
-                                    notesList.push(note.trim());
-                                }
-                                idx++;
-                            });
-                        });
+let idx = 0;
+sec.subsections.forEach(sub => {
+    sub.items.forEach(item => {
+        const ik = `${sec.key}__${idx}`;
+        const sc = scores[ik];
+        const note = notes[ik];
+
+        if (sc === 0 || sc === 1) {
+            // Use user note if provided, otherwise fall back to item text
+            const content = (note && note.trim()) ? note.trim() : item.text;
+            notesList.push(content);
+        } else if (sc === 2 && note && note.trim()) {
+            // For fully-scored items, only include if user added a note
+            notesList.push(note.trim());
+        }
+        idx++;
+    });
+});
 
                         return buildWordTableRow(sec.title, notesList, pct);
                     }).join('\n');
