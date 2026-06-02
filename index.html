@@ -4577,6 +4577,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                 meta.inspectors = rawInsp.trim();
                 meta.type = rawType.trim();
 
+               const sheet2 = new TextDecoder().decode(files['xl/worksheets/sheet2.xml']);
                 scores = {};
                 FORM_DATA.forEach(sec => {
                     let idx = 0;
@@ -4584,18 +4585,32 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                         const mapKey = sec.key + '__' + idx;
                         const exRow = ROW_MAP[mapKey];
                         if (exRow) {
-                            const cAddr = 'C' + exRow;
-                            const cRe = new RegExp('<c\\s[^>]*r="' + cAddr + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
-                            const cMatch = sheet.match(cRe);
-                            if (cMatch) {
-                                const vMatch = cMatch[0].match(/<v>([^<]*)<\/v>/);
+                            const onSheet2 = exRow < 0;
+                            const onColH   = exRow >= 20000;
+                            const absRow   = onColH ? exRow - 20000 : Math.abs(exRow);
+                            const sheetXml = onSheet2 ? sheet2 : sheet;
+                            // Score column
+                            const scoreCol = onSheet2 ? 'G' : (onColH ? 'H' : 'E');
+                            // Notes column — exact ranges from the spreadsheet:
+                            // Sheet1: F11:F526, C528:C559
+                            // Sheet2: F6:F145,  C152:C166
+                            let noteCol;
+                            if (onSheet2) {
+                                noteCol = absRow >= 152 ? 'C' : 'F';
+                            } else if (onColH) {
+                                noteCol = absRow <= 526 ? 'F' : 'C';
+                            } else {
+                                noteCol = 'F';
+                            }
+                            const scoreRe = new RegExp('<c\\s[^>]*r="' + scoreCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
+                            const scoreMatch = sheetXml.match(scoreRe);
+                            if (scoreMatch) {
+                                const vMatch = scoreMatch[0].match(/<v>([^<]*)<\/v>/);
                                 if (vMatch) {
                                     let val = vMatch[1].trim();
-                                    if (/\bt="s"/.test(cMatch[0])) {
+                                    if (/\bt="s"/.test(scoreMatch[0])) {
                                         const ssIdx = parseInt(val);
-                                        if (!isNaN(ssIdx) && ssItems[ssIdx] !== undefined) {
-                                            val = ssItems[ssIdx];
-                                        }
+                                        if (!isNaN(ssIdx) && ssItems[ssIdx] !== undefined) val = ssItems[ssIdx];
                                     }
                                     if (val === 'N/A') scores[mapKey] = 'N/A';
                                     else if (val === '0' || val === '0.0') scores[mapKey] = 0;
@@ -4603,13 +4618,12 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                                     else if (val === '2' || val === '2.0') scores[mapKey] = 2;
                                 }
                             }
-                            const dAddr = 'D' + exRow;
-                            const dRe = new RegExp('<c\\s[^>]*r="' + dAddr + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
-                            const dMatch = sheet.match(dRe);
-                            if (dMatch) {
-                                const vMatch = dMatch[0].match(/<v>([^<]*)<\/v>/);
+                            const noteRe = new RegExp('<c\\s[^>]*r="' + noteCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
+                            const noteMatch = sheetXml.match(noteRe);
+                            if (noteMatch) {
+                                const vMatch = noteMatch[0].match(/<v>([^<]*)<\/v>/);
                                 if (vMatch && vMatch[1].trim()) {
-                                    if (/\bt="s"/.test(dMatch[0])) {
+                                    if (/\bt="s"/.test(noteMatch[0])) {
                                         const ssIdx = parseInt(vMatch[1].trim());
                                         if (!isNaN(ssIdx) && ssItems[ssIdx]) notes[mapKey] = ssItems[ssIdx];
                                     } else {
@@ -4658,6 +4672,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                     ssItems.push(txt.trim());
                 });
 
+                const sheet2 = new TextDecoder().decode(files['xl/worksheets/sheet2.xml']);
                 const incomingScores = {};
                 const incomingNotes  = {};
 
@@ -4667,8 +4682,21 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                         const mapKey = sec.key + '__' + idx;
                         const exRow  = ROW_MAP[mapKey];
                         if (exRow) {
-                            const cRe = new RegExp('<c\\s[^>]*r="C' + exRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
-                            const cM  = sheet.match(cRe);
+                            const onSheet2 = exRow < 0;
+                            const onColH   = exRow >= 20000;
+                            const absRow   = onColH ? exRow - 20000 : Math.abs(exRow);
+                            const sheetXml = onSheet2 ? sheet2 : sheet;
+                            const scoreCol = onSheet2 ? 'G' : (onColH ? 'H' : 'E');
+                            let noteCol;
+                            if (onSheet2) {
+                                noteCol = absRow >= 152 ? 'C' : 'F';
+                            } else if (onColH) {
+                                noteCol = absRow <= 526 ? 'F' : 'C';
+                            } else {
+                                noteCol = 'F';
+                            }
+                            const cRe = new RegExp('<c\\s[^>]*r="' + scoreCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
+                            const cM  = sheetXml.match(cRe);
                             if (cM) {
                                 const vM = cM[0].match(/<v>([^<]*)<\/v>/);
                                 if (vM) {
@@ -4683,8 +4711,8 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                                     else if (val === '2' || val === '2.0') incomingScores[mapKey] = 2;
                                 }
                             }
-                            const dRe = new RegExp('<c\\s[^>]*r="D' + exRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
-                            const dM  = sheet.match(dRe);
+                            const dRe = new RegExp('<c\\s[^>]*r="' + noteCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
+                            const dM  = sheetXml.match(dRe);
                             if (dM) {
                                 const vM = dM[0].match(/<v>([^<]*)<\/v>/);
                                 if (vM && vM[1].trim()) {
