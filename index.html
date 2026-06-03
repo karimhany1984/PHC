@@ -6374,7 +6374,7 @@ async function importExcelWithOptions(file, importMode = 'new') {
         ? new TextDecoder().decode(zipFiles['xl/worksheets/sheet3.xml']) : '';
     const ssRaw = new TextDecoder().decode(zipFiles['xl/sharedStrings.xml']);
 
-    // ── Parse shared strings (same as handleFileUpload) ──────────────
+    // Parse shared strings
     const ssItems = [];
     ssRaw.replace(/<si>([\s\S]*?)<\/si>/g, (_, inner) => {
         let txt = '';
@@ -6382,42 +6382,47 @@ async function importExcelWithOptions(file, importMode = 'new') {
         ssItems.push(txt.trim());
     });
 
-    // ── Cell reader (identical logic to handleFileUpload) ─────────────
+    // ─── Robust cell reader: handles v, inlineStr, self-closing, shared strings ───
     const readCell = (sheetXml, cellRef) => {
-        // First check for a self-closing tag (no value, e.g. <c r="F44" s="7"/>)
-        const scRe = new RegExp('<c\\s[^>]*r="' + cellRef + '"[^>]*/\\s*>');
-        if (scRe.test(sheetXml)) return null;
-        // Row-boundary guard: [^<]*(?:<(?!\/row>)[^<]*)* prevents crossing </row>
-        const re = new RegExp('<c\\s[^>]*r="' + cellRef + '"[^>]*>[^<]*(?:<(?!\\/row>)[^<]*)*<\\/c>');
-        const m = sheetXml.match(re);
-        if (!m) return null;
-        const xml = m[0];
-        const v = xml.match(/<v>([^<]*)<\/v>/);
-        if (!v) return null;
-        if (/\bt="s"/.test(xml)) {
-            const si = parseInt(v[1]);
-            return (!isNaN(si) && ssItems[si] !== undefined) ? ssItems[si] : null;
+        // 1) self‑closing cell? (no value)
+        if (new RegExp('<c\\s[^>]*r="' + cellRef + '"[^>]*/\\s*>').test(sheetXml)) {
+            return null;
         }
-        if (/\bt="str"/.test(xml)) return v[1];
-        return v[1];
+        // 2) regular cell with content, stopping at </row>
+        const re = new RegExp('<c\\s[^>]*r="' + cellRef + '"[^>]*>([\\s\\S]*?)<\\/c>', 'i');
+        const match = sheetXml.match(re);
+        if (!match) return null;
+        const inner = match[1];
+
+        // Check for inline string <is><t>...</t></is>
+        const inlineMatch = inner.match(/<is>.*?<t[^>]*>([^<]*)<\/t>.*?<\/is>/i);
+        if (inlineMatch) return inlineMatch[1];
+
+        // Check for <v> tag
+        const vMatch = inner.match(/<v>([^<]*)<\/v>/);
+        if (!vMatch) return null;
+        const raw = vMatch[1];
+        const isShared = /t="s"/i.test(match[0]);
+        if (isShared) {
+            const idx = parseInt(raw, 10);
+            return (!isNaN(idx) && ssItems[idx] !== undefined) ? ssItems[idx] : null;
+        }
+        const isStr = /t="str"/i.test(match[0]);
+        if (isStr) return raw;
+        return raw; // numeric or plain text
     };
 
-    // ── Parse score value string → 0/1/2/'N/A'/undefined ─────────────
     const parseScore = (raw) => {
         if (raw === null || raw === undefined) return undefined;
         const v = String(raw).trim();
-        if (v === 'N/A')              return 'N/A';
+        if (v === 'N/A') return 'N/A';
         if (v === '0' || v === '0.0') return 0;
         if (v === '1' || v === '1.0') return 1;
         if (v === '2' || v === '2.0') return 2;
         return undefined;
     };
 
-    // ── Read metadata from sheet3 ──────────────────────────────────────
-    // Sheet3 layout (confirmed from XML):
-    //   B3 = hospital name value (merged B3:D3)
-    //   F3 = date value
-    //   F4 = inspector value
+    // ─── Read metadata from sheet3 ─────────────────────────────────────
     const importedMeta = {
         hospitalName: (readCell(sheet3xml, 'B3') || '').trim(),
         dates:        (readCell(sheet3xml, 'F3') || '').trim(),
@@ -6425,7 +6430,6 @@ async function importExcelWithOptions(file, importMode = 'new') {
         type:         ''
     };
 
-    // Detect region from hospital name
     let importedRegion = '';
     for (const [reg, units] of Object.entries(REGION_UNITS)) {
         if (units.includes(importedMeta.hospitalName)) { importedRegion = reg; break; }
@@ -6434,19 +6438,7 @@ async function importExcelWithOptions(file, importMode = 'new') {
     const importedScores = {};
     const importedNotes  = {};
 
-    // ── Read all scores and notes ──────────────────────────────────────
-    // Confirmed column mapping:
-    //
-    // Sheet1 (العيادات):
-    //   Regular rows (ROW_MAP positive, < 20000): score=E, note=F
-    //   Counseling rows (ROW_MAP >= 20000, absRow = exRow-20000):
-    //     rows 508-526: score=H, note=F
-    //     rows 527-559: score=H, note=C
-    //
-    // Sheet2 (مبادرات-البان):
-    //   Regular initiatives (ROW_MAP negative, rows 6-145): score=G, note=F
-    //   Milk section (rows 152-166): score=G, note=C
-
+    // ─── Read scores and notes for all items ─────────────────────────────
     FORM_DATA.forEach(sec => {
         let idx = 0;
         sec.subsections.forEach(sub => sub.items.forEach(() => {
@@ -6457,40 +6449,36 @@ async function importExcelWithOptions(file, importMode = 'new') {
                 const onSheet2 = exRow < 0;
                 const onColH   = exRow >= 20000;
                 const absRow   = onColH ? exRow - 20000 : Math.abs(exRow);
-                const sheetXml = (onSheet2) ? sheet2xml : sheet1xml;
+                const sheetXml = onSheet2 ? sheet2xml : sheet1xml;
 
                 if (!sheetXml) { idx++; return; }
 
                 let scoreCol, noteCol;
-
                 if (onSheet2) {
-                    // Sheet2: score always G
-                    // note: F for initiatives (rows 6-145), C for milk (rows 152+)
                     scoreCol = 'G';
                     noteCol  = absRow >= 152 ? 'C' : 'F';
                 } else if (onColH) {
-                    // Sheet1 counseling section
-                    // score always H
-                    // note: F for rows 508-526 (labeled items), C for rows 527-559 (checklist items)
                     scoreCol = 'H';
                     noteCol  = absRow <= 526 ? 'F' : 'C';
                 } else {
-                    // Sheet1 regular sections: score=E, note=F
                     scoreCol = 'E';
                     noteCol  = 'F';
                 }
 
-                const sc = parseScore(readCell(sheetXml, scoreCol + absRow));
+                const scoreRaw = readCell(sheetXml, scoreCol + absRow);
+                const sc = parseScore(scoreRaw);
                 if (sc !== undefined) importedScores[mapKey] = sc;
 
-                const note = readCell(sheetXml, noteCol + absRow);
-                if (note && String(note).trim() && !/^\d+(\.\d+)?$/.test(String(note).trim())) importedNotes[mapKey] = String(note).trim();
+                const noteRaw = readCell(sheetXml, noteCol + absRow);
+                if (noteRaw && String(noteRaw).trim() && !/^\d+(\.\d+)?$/.test(String(noteRaw).trim())) {
+                    importedNotes[mapKey] = String(noteRaw).trim();
+                }
             }
             idx++;
         }));
     });
 
-    // ── Apply based on chosen mode ─────────────────────────────────────
+    // ─── Apply based on chosen mode ─────────────────────────────────────
     const applyMeta = () => {
         meta.hospitalName = importedMeta.hospitalName;
         meta.dates        = importedMeta.dates;
@@ -6509,9 +6497,7 @@ async function importExcelWithOptions(file, importMode = 'new') {
         updateProgress();
         showHome();
         showToast('✓ تم استبدال البيانات الحالية');
-
     } else if (importMode === 'merge') {
-        // Only fill gaps — don't overwrite existing answers
         Object.keys(importedScores).forEach(k => {
             if (scores[k] === undefined) scores[k] = importedScores[k];
         });
@@ -6524,9 +6510,8 @@ async function importExcelWithOptions(file, importMode = 'new') {
         updateProgress();
         showHome();
         showToast('✓ تم دمج البيانات الجديدة');
-
     } else {
-        // 'new' — save as a fresh database record without disturbing current session
+        // 'new' – save as fresh record without touching current session
         const tempMeta   = { ...meta };
         const tempScores = { ...scores };
         const tempNotes  = { ...notes };
