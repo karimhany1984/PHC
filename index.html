@@ -4591,16 +4591,16 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                             const sheetXml = onSheet2 ? sheet2 : sheet;
                             // Score column
                             const scoreCol = onSheet2 ? 'G' : (onColH ? 'H' : 'E');
-                            // Notes column — exact ranges from the spreadsheet:
-                            // Sheet1: F11:F526, C528:C559
+                            // Notes column — strict ranges only (rows outside these are ignored):
+                            // Sheet1: F11:F500, F508:F526, C528:C559
                             // Sheet2: F6:F145,  C152:C166
-                            let noteCol;
+                            let noteCol = null;
                             if (onSheet2) {
-                                noteCol = absRow >= 152 ? 'C' : 'F';
-                            } else if (onColH) {
-                                noteCol = absRow <= 526 ? 'F' : 'C';
+                                if (absRow >= 6 && absRow <= 145) noteCol = 'F';
+                                else if (absRow >= 152 && absRow <= 166) noteCol = 'C';
                             } else {
-                                noteCol = 'F';
+                                if ((absRow >= 11 && absRow <= 500) || (absRow >= 508 && absRow <= 526)) noteCol = 'F';
+                                else if (absRow >= 528 && absRow <= 559) noteCol = 'C';
                             }
                             const scoreRe = new RegExp('<c\\s[^>]*r="' + scoreCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
                             const scoreMatch = sheetXml.match(scoreRe);
@@ -4618,15 +4618,17 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                                     else if (val === '2' || val === '2.0') scores[mapKey] = 2;
                                 }
                             }
-                            const noteRe = new RegExp('<c\\s[^>]*r="' + noteCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
-                            const noteMatch = sheetXml.match(noteRe);
-                            if (noteMatch) {
-                                const vMatch = noteMatch[0].match(/<v>([^<]*)<\/v>/);
-                                if (vMatch && vMatch[1].trim()) {
-                                    if (/\bt="s"/.test(noteMatch[0])) {
-                                        const ssIdx = parseInt(vMatch[1].trim());
-                                        const noteVal = !isNaN(ssIdx) && ssItems[ssIdx] ? ssItems[ssIdx] : '';
-                                        if (noteVal && !/^\d+(\.\d+)?$/.test(noteVal)) notes[mapKey] = noteVal;
+                            if (noteCol) {
+                                const noteRe = new RegExp('<c\\s[^>]*r="' + noteCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
+                                const noteMatch = sheetXml.match(noteRe);
+                                if (noteMatch) {
+                                    const vMatch = noteMatch[0].match(/<v>([^<]*)<\/v>/);
+                                    if (vMatch && vMatch[1].trim()) {
+                                        if (/\bt="s"/.test(noteMatch[0])) {
+                                            const ssIdx = parseInt(vMatch[1].trim());
+                                            const noteVal = !isNaN(ssIdx) && ssItems[ssIdx] ? ssItems[ssIdx] : '';
+                                            if (noteVal && !/^\d+(\.\d+)?$/.test(noteVal)) notes[mapKey] = noteVal;
+                                        }
                                     }
                                 }
                             }
@@ -4686,13 +4688,16 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                             const absRow   = onColH ? exRow - 20000 : Math.abs(exRow);
                             const sheetXml = onSheet2 ? sheet2 : sheet;
                             const scoreCol = onSheet2 ? 'G' : (onColH ? 'H' : 'E');
-                            let noteCol;
+                            // Notes column — strict ranges only (rows outside these are ignored):
+                            // Sheet1: F11:F500, F508:F526, C528:C559
+                            // Sheet2: F6:F145,  C152:C166
+                            let noteCol = null;
                             if (onSheet2) {
-                                noteCol = absRow >= 152 ? 'C' : 'F';
-                            } else if (onColH) {
-                                noteCol = absRow <= 526 ? 'F' : 'C';
+                                if (absRow >= 6 && absRow <= 145) noteCol = 'F';
+                                else if (absRow >= 152 && absRow <= 166) noteCol = 'C';
                             } else {
-                                noteCol = 'F';
+                                if ((absRow >= 11 && absRow <= 500) || (absRow >= 508 && absRow <= 526)) noteCol = 'F';
+                                else if (absRow >= 528 && absRow <= 559) noteCol = 'C';
                             }
                             const cRe = new RegExp('<c\\s[^>]*r="' + scoreCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
                             const cM  = sheetXml.match(cRe);
@@ -4710,15 +4715,17 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
                                     else if (val === '2' || val === '2.0') incomingScores[mapKey] = 2;
                                 }
                             }
-                         const dRe = new RegExp('<c\\s[^>]*r="' + noteCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
-                            const dM  = sheetXml.match(dRe);
-                            if (dM) {
-                                const vM = dM[0].match(/<v>([^<]*)<\/v>/);
-                                if (vM && vM[1].trim()) {
-                                    if (/\bt="s"/.test(dM[0])) {
-                                        const si = parseInt(vM[1].trim());
-                                        const noteVal = !isNaN(si) && ssItems[si] ? ssItems[si] : '';
-                                        if (noteVal && !/^\d+(\.\d+)?$/.test(noteVal)) incomingNotes[mapKey] = noteVal;
+                            if (noteCol) {
+                                const dRe = new RegExp('<c\\s[^>]*r="' + noteCol + absRow + '"(?=[">/ ])[^>]*>(?:(?!<\/row>)[\\s\\S])*?<\/c>');
+                                const dM  = sheetXml.match(dRe);
+                                if (dM) {
+                                    const vM = dM[0].match(/<v>([^<]*)<\/v>/);
+                                    if (vM && vM[1].trim()) {
+                                        if (/\bt="s"/.test(dM[0])) {
+                                            const si = parseInt(vM[1].trim());
+                                            const noteVal = !isNaN(si) && ssItems[si] ? ssItems[si] : '';
+                                            if (noteVal && !/^\d+(\.\d+)?$/.test(noteVal)) incomingNotes[mapKey] = noteVal;
+                                        }
                                     }
                                 }
                             }
