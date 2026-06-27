@@ -950,27 +950,6 @@ body {
 .sum-max { font-size: 12px; color: var(--text-muted); }
 .sum-pct { font-size: 13px; font-weight: 700; }
 
-/* ── Highlight feature ── */
-.sum-card-header { display:flex; align-items:flex-start; justify-content:space-between; gap:4px; margin-bottom:8px; }
-.sum-card-title-hl { font-size:13px; font-weight:700; color:var(--text); flex:1; }
-.sum-highlight-btn { background:none; border:none; font-size:15px; cursor:pointer; padding:1px 3px; opacity:0.3; transition:opacity 0.15s,transform 0.15s; flex-shrink:0; line-height:1; border-radius:4px; }
-.sum-highlight-btn:hover { opacity:1; transform:scale(1.15); }
-.sum-highlight-btn.active { opacity:1; }
-.sum-card-highlighted { border:2px solid var(--accent) !important; background:linear-gradient(135deg,#fffbf2 0%,#fef3dc 100%) !important; }
-.sum-card-highlighted .sum-card-title-hl { color:var(--accent); }
-.sum-card-highlighted .sum-earned { color:var(--accent); }
-.sum-card-imported { border:2px solid #5ba3c9 !important; background:#D2EAF1 !important; }
-.sum-card-imported .sum-card-title-hl { color:#1a6faf; }
-.sum-card-imported .sum-earned { color:#1a6faf; }
-.sum-date-badge { display:inline-block; font-size:10px; color:#888; margin-bottom:5px; background:rgba(0,0,0,0.04); border-radius:4px; padding:1px 5px; }
-.qa-btn-clear-hl { background:var(--accent-light,#fff3e0); color:var(--accent,#e8a020); border:1.5px solid var(--accent,#e8a020); }
-/* Sidebar highlighted items */
-.nav-item.nav-highlighted { background:linear-gradient(135deg,#fffbf2,#fef3dc); border-right:3px solid var(--accent,#e8a020) !important; }
-.nav-item.nav-highlighted .nav-title { color:var(--accent,#e8a020); }
-.nav-item.nav-hl-imported { background:#D2EAF1 !important; border-right:3px solid #5ba3c9 !important; }
-.nav-item.nav-hl-imported .nav-title { color:#1a6faf; }
-.nav-hl-dot { font-size:11px; margin-right:2px; flex-shrink:0; opacity:0.85; }
-
     /* ========== MOBILE BOTTOM NAV ========== */
     .mobile-nav {
         position: fixed;
@@ -4298,8 +4277,6 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
         let scores = {};
         let notes = {};
         let meta = { hospital: '', hospitalName: '', region: '', type: '', governorate: 'الاسكندرية', inspectors: '', dates: '', result: '' };
-        let highlightedSections = {};
-        let sectionDates = {};
         let currentSection = 'home';
         let currentReportFilters = { region: '', hospitalName: '', year: '', month: '' };
         let currentAnalysisFilters = { region: '', hospitalName: '', governorate: '', year: '', month: '' };
@@ -5067,7 +5044,7 @@ button, .nav-item, .nav-card, .qa-btn, .sec-nav-btn, .mobile-nav-btn, .hbtn {
 
             const handler = `
 self.onmessage = async function(e) {
-    const { templateBuf, scores, notes, ROW_MAP, meta, highlightedSections, sectionDates, formDataKeys } = e.data;
+    const { templateBuf, scores, notes, ROW_MAP, meta } = e.data;
     try {
         postMessage({ status: 'progress', msg: 'فك ضغط القالب...' });
         const files = await _workerZipRead(new Uint8Array(templateBuf));
@@ -5087,16 +5064,22 @@ self.onmessage = async function(e) {
 
         for (const [ik, rawRow] of Object.entries(ROW_MAP)) {
             const onSheet2  = rawRow < 0;
-            const onColH    = rawRow >= 20000;
+            const onColH    = rawRow >= 20000;           // sheet1, column H
             const xRow      = onColH ? rawRow - 20000 : Math.abs(rawRow);
             const sc        = scores[ik];
             const note      = notes[ik] || '';
             if (onSheet2) {
+                // Sheet2 (مبادرات-البان):
+                //   rows 6-145  → score G, notes F
+                //   rows 152-166 (milk) → score G, notes C
                 const noteCol2 = xRow >= 152 ? 'C' : 'F';
                 if (sc==='N/A') patches2.push(['G'+xRow,'N/A']);
                 else if (sc!==undefined&&sc!==null) patches2.push(['G'+xRow, sc]);
                 patches2.push([noteCol2+xRow, note]);
             } else if (onColH) {
+                // Sheet1 counseling col-H rows:
+                //   rows 508-526 → score H, notes F
+                //   rows 527-559 → score H, notes C
                 const noteCol1 = xRow <= 526 ? 'F' : 'C';
                 if (sc==='N/A') patches1.push(['H'+xRow,'N/A']);
                 else if (sc!==undefined&&sc!==null) patches1.push(['H'+xRow, sc]);
@@ -5112,88 +5095,6 @@ self.onmessage = async function(e) {
         sheet1 = _workerPatchAllCells(sheet1, patches1);
         sheet2 = _workerPatchAllCells(sheet2, patches2);
         sheet3 = _workerPatchAllCells(sheet3, patches3);
-
-        // Apply highlight fills to sheet3 D9:D51
-        if (highlightedSections && formDataKeys && files['xl/styles.xml']) {
-            try {
-                let stylesXml = new TextDecoder('utf-8').decode(files['xl/styles.xml']);
-                const newKeys      = formDataKeys.filter(k => highlightedSections[k]==='new'||highlightedSections[k]===true);
-                const importedKeys = formDataKeys.filter(k => highlightedSections[k]==='imported');
-
-                let yellowFillId = -1, yellowStyleIdx = -1;
-                let whiteFillId  = -1, whiteStyleIdx  = -1;
-
-                const getFillsCnt = (xml) => { const m=xml.match(/<fills count="(\d+)"/); return m?parseInt(m[1]):-1; };
-                const getXfsCnt   = (xml) => { const m=xml.match(/<cellXfs count="(\d+)"/); return m?parseInt(m[1]):-1; };
-
-                if (newKeys.length > 0) {
-                    let fc = getFillsCnt(stylesXml);
-                    if (fc>=0) {
-                        yellowFillId = fc;
-                        stylesXml = stylesXml.replace('</fills>','<fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill></fills>');
-                        stylesXml = stylesXml.replace('<fills count="'+fc+'"','<fills count="'+(fc+1)+'"');
-                        let xc = getXfsCnt(stylesXml);
-                        if (xc>=0) {
-                            yellowStyleIdx = xc;
-                            stylesXml = stylesXml.replace('</cellXfs>','<xf numFmtId="0" fontId="0" fillId="'+yellowFillId+'" borderId="0" xfId="0" applyFill="1"/></cellXfs>');
-                            stylesXml = stylesXml.replace('<cellXfs count="'+xc+'"','<cellXfs count="'+(xc+1)+'"');
-                        }
-                    }
-                }
-                if (importedKeys.length > 0) {
-                    let fc = getFillsCnt(stylesXml);
-                    if (fc>=0) {
-                        whiteFillId = fc;
-                        stylesXml = stylesXml.replace('</fills>','<fill><patternFill patternType="none"/></fill></fills>');
-                        stylesXml = stylesXml.replace('<fills count="'+fc+'"','<fills count="'+(fc+1)+'"');
-                        let xc = getXfsCnt(stylesXml);
-                        if (xc>=0) {
-                            whiteStyleIdx = xc;
-                            stylesXml = stylesXml.replace('</cellXfs>','<xf numFmtId="0" fontId="0" fillId="'+whiteFillId+'" borderId="0" xfId="0" applyFill="1"/></cellXfs>');
-                            stylesXml = stylesXml.replace('<cellXfs count="'+xc+'"','<cellXfs count="'+(xc+1)+'"');
-                        }
-                    }
-                }
-                files['xl/styles.xml'] = new TextEncoder().encode(stylesXml);
-
-                const applyDStyle = (xml, row, si) => {
-                    const ref = 'D'+row;
-                    const ep = new RegExp('(<c r="'+ref+'")(\\s[^>]*)?(/>|>)');
-                    const m = xml.match(ep);
-                    if (m) {
-                        let attrs = (m[2]||'').replace(/\s*s="\d+"/,'');
-                        xml = xml.replace(ep, '<c r="'+ref+'"'+attrs+' s="'+si+'"'+m[3]);
-                    } else {
-                        const rp = new RegExp('(<row r="'+row+'"[^>]*>)([\\s\\S]*?)(</row>)');
-                        const rm = xml.match(rp);
-                        if (rm) xml = xml.replace(rp, rm[1]+rm[2]+'<c r="'+ref+'" s="'+si+'"/>'+rm[3]);
-                    }
-                    return xml;
-                };
-                const patchBDate = (xml, row, txt) => {
-                    if (!txt) return xml;
-                    const ref = 'B'+row;
-                    xml = xml.replace(new RegExp('<c r="'+ref+'"[^>]*(?:/>|>[\\s\\S]*?</c>)'), '');
-                    const rp = new RegExp('(<row r="'+row+'"[^>]*>)([\\s\\S]*?)(</row>)');
-                    const rm = xml.match(rp);
-                    if (rm) xml = xml.replace(rp, rm[1]+'<c r="'+ref+'" t="inlineStr"><is><t>'+txt+'</t></is></c>'+rm[2]+rm[3]);
-                    return xml;
-                };
-
-                formDataKeys.forEach((key, idx) => {
-                    const dRow = 9 + idx;
-                    const hl = highlightedSections[key];
-                    if (hl==='new'||hl===true) {
-                        if (yellowStyleIdx>=0) sheet3 = applyDStyle(sheet3, dRow, yellowStyleIdx);
-                        const dt = sectionDates[key]||meta.dates;
-                        if (dt) sheet3 = patchBDate(sheet3, dRow, dt);
-                    } else if (hl==='imported') {
-                        if (whiteStyleIdx>=0) sheet3 = applyDStyle(sheet3, dRow, whiteStyleIdx);
-                        if (sectionDates[key]) sheet3 = patchBDate(sheet3, dRow, sectionDates[key]);
-                    }
-                });
-            } catch(hlErr) { /* highlight optional */ }
-        }
 
         files['xl/worksheets/sheet1.xml'] = new TextEncoder().encode(sheet1);
         files['xl/worksheets/sheet2.xml'] = new TextEncoder().encode(sheet2);
@@ -5254,10 +5155,7 @@ self.onmessage = async function(e) {
                         scores:  JSON.parse(JSON.stringify(scores)),
                         notes:   JSON.parse(JSON.stringify(notes)),
                         ROW_MAP: ROW_MAP,
-                        meta:    { dates: meta.dates, hospitalName: meta.hospitalName, inspectors: meta.inspectors },
-                        highlightedSections: JSON.parse(JSON.stringify(highlightedSections)),
-                        sectionDates: JSON.parse(JSON.stringify(sectionDates)),
-                        formDataKeys: FORM_DATA.map(s => s.key)
+                        meta:    { dates: meta.dates, hospitalName: meta.hospitalName, inspectors: meta.inspectors }
                     }, [templateCopy]);
                 });
 
@@ -5524,20 +5422,13 @@ sec.subsections.forEach(sub => {
                 if (answered > 0 && answered < total) { pillClass = 'pill-partial'; pillText = `${answered}/${total}` }
                 else if (answered === total && total > 0) { pillClass = 'pill-done'; pillText = `✓` }
                 const isActive = currentSection === sec.key;
-                const hlState    = highlightedSections[sec.key];
-                const isNew      = hlState === 'new' || hlState === true;
-                const isImported = hlState === 'imported';
-                const hlClass    = isNew ? ' nav-highlighted' : isImported ? ' nav-hl-imported' : '';
-                const hlDot      = (isNew || isImported) ? `<span class="nav-hl-dot">🔔</span>` : '';
-                const editDate   = sectionDates[sec.key];
-                const navDateStr = (isNew || isImported) && editDate ? ` · ${editDate}` : '';
-                html += `<div class="nav-item ${isActive ? 'active' : ''}${hlClass}" id="nav-${sec.key}" onclick="showSection('${sec.key}');closeSidebar()">
+                html += `<div class="nav-item ${isActive ? 'active' : ''}" id="nav-${sec.key}" onclick="showSection('${sec.key}');closeSidebar()">
           <div class="nav-icon ic-${sec.key}"></div>
           <div class="nav-text">
             <div class="nav-title">${sec.title}</div>
-            <div class="nav-sub">${sec.max} نقطة · ${sec.subsections.reduce((a, s) => a + s.items.length, 0)} عنصر${navDateStr}</div>
+            <div class="nav-sub">${sec.max} نقطة · ${sec.subsections.reduce((a, s) => a + s.items.length, 0)} عنصر</div>
           </div>
-          ${hlDot}<span class="nav-pill ${pillClass}" id="npill-${sec.key}">${pillText}</span>
+          <span class="nav-pill ${pillClass}" id="npill-${sec.key}">${pillText}</span>
         </div>`;
             });
 
@@ -5556,28 +5447,6 @@ sec.subsections.forEach(sub => {
             else if (answered === total && total > 0) { pillClass = 'pill-done'; pillText = '✓' }
             pill.className = `nav-pill ${pillClass}`;
             pill.textContent = pillText;
-            // Update highlight classes
-            const hlState    = highlightedSections[key];
-            const isNew      = hlState === 'new' || hlState === true;
-            const isImported = hlState === 'imported';
-            el.classList.toggle('nav-highlighted', isNew);
-            el.classList.toggle('nav-hl-imported',  isImported);
-            // Bell dot
-            let dot = el.querySelector('.nav-hl-dot');
-            if ((isNew || isImported) && !dot) {
-                dot = document.createElement('span');
-                dot.className = 'nav-hl-dot';
-                dot.textContent = '🔔';
-                el.insertBefore(dot, pill);
-            } else if (!isNew && !isImported && dot) { dot.remove(); }
-            // Date in sub-text
-            const sub = el.querySelector('.nav-sub');
-            if (sub) {
-                const sec = FORM_DATA.find(s => s.key === key);
-                const base = sec ? `${sec.max} نقطة · ${sec.subsections.reduce((a,s)=>a+s.items.length,0)} عنصر` : '';
-                const editDate = sectionDates[key];
-                sub.textContent = base + ((isNew || isImported) && editDate ? ` · ${editDate}` : '');
-            }
         }
 
         function showHome() {
@@ -5801,23 +5670,8 @@ sec.subsections.forEach(sub => {
                 const fillClass = pct >= 80 ? 'fill-h' : pct >= 50 ? 'fill-m' : pct > 0 ? 'fill-l' : '';
                 const fillColor = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : pct > 0 ? 'var(--red)' : 'var(--border)';
                 const pctColor2 = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : pct > 0 ? 'var(--red)' : 'var(--text-dim)';
-                const hlState    = highlightedSections[sec.key];
-                const isNew      = hlState === 'new' || hlState === true;
-                const isImported = hlState === 'imported';
-                const isAnyHL    = isNew || isImported;
-                const cardClass  = isNew ? ' sum-card-highlighted' : isImported ? ' sum-card-imported' : '';
-                const hlBtnClass = isAnyHL ? ' active' : '';
-                const editDate   = sectionDates[sec.key] || '';
-                const dateBadge  = isAnyHL && editDate ? `<span class="sum-date-badge">📅 ${editDate}</span>` : '';
-                const hlTitle    = isNew ? `معدَّل — ${editDate || 'هذه الجلسة'} — انقر لإزالة`
-                                 : isImported ? `معدَّل سابقاً — ${editDate} — انقر للترقية`
-                                 : 'انقر لتمييز';
-                return `<div class="sum-card${cardClass}" onclick="showSection('${sec.key}')">
-          <div class="sum-card-header">
-            <div class="sum-card-title-hl">${sec.title}</div>
-            <button class="sum-highlight-btn${hlBtnClass}" title="${hlTitle}" onclick="event.stopPropagation();toggleSectionHighlight('${sec.key}')">🔔</button>
-          </div>
-          ${dateBadge}
+                return `<div class="sum-card" onclick="showSection('${sec.key}')">
+          <div class="sum-card-title">${sec.title}</div>
           <div class="sum-bar"><div class="sum-bar-fill" style="width:${pct}%;background:${fillColor}"></div></div>
           <div class="sum-scores">
             <span class="sum-earned">${earned}</span>
@@ -5826,12 +5680,6 @@ sec.subsections.forEach(sub => {
           </div>
         </div>`;
             }).join('');
-
-            const hlCount  = Object.values(highlightedSections).filter(v => v === 'new' || v === true).length;
-            const impCount = Object.values(highlightedSections).filter(v => v === 'imported').length;
-            const clearHlBtn = (hlCount + impCount) > 0
-                ? `<button class="qa-btn qa-btn-clear-hl" onclick="clearAllHighlights()">🔕 مسح كل التمييزات (${hlCount + impCount})</button>`
-                : '';
 
             document.getElementById('mainContent').innerHTML = `
         <div class="summary-view">
@@ -5848,21 +5696,9 @@ sec.subsections.forEach(sub => {
           </div>
           <div class="quick-actions">
             <button class="qa-btn" style="background:var(--primary);color:#fff;" onclick="exportWord()">📄 تصدير Word</button>
-            ${clearHlBtn}
           </div>
           <div class="sum-grid">${cardsHtml}</div>
         </div>`;
-        }
-
-        function toggleSectionHighlight(key) {
-            const cur = highlightedSections[key];
-            if (cur === 'new' || cur === true) { delete highlightedSections[key]; }
-            else { highlightedSections[key] = 'new'; }
-            debounceSave(); buildSidebarNav(); renderSummary();
-        }
-        function clearAllHighlights() {
-            highlightedSections = {}; sectionDates = {};
-            debounceSave(); buildSidebarNav(); renderSummary();
         }
 
         function setScore(ik, val, secKey) {
@@ -5890,9 +5726,6 @@ sec.subsections.forEach(sub => {
             }
 
             scores[ik] = val;
-            // Auto-highlight section as 'new' and record date
-            highlightedSections[secKeyFromIk] = 'new';
-            sectionDates[secKeyFromIk] = meta.dates || new Date().toLocaleDateString('ar-EG', { year:'numeric', month:'2-digit', day:'2-digit' });
             const row = document.getElementById(`irow-${ik}`);
             if (row) {
                 row.classList.remove('scored-0', 'scored-1', 'scored-2', 'scored-na');
@@ -5922,13 +5755,6 @@ sec.subsections.forEach(sub => {
             notes[ik] = val;
             const btn = document.getElementById(`nbtn-${ik}`);
             if (btn) btn.classList.toggle('has-note', !!val);
-            // Auto-highlight section as 'new' and record date
-            const secKey = ik.split('__')[0];
-            if (secKey) {
-                highlightedSections[secKey] = 'new';
-                sectionDates[secKey] = meta.dates || new Date().toLocaleDateString('ar-EG', { year:'numeric', month:'2-digit', day:'2-digit' });
-                updateNavItem(secKey);
-            }
             debounceSave();
         }
 
@@ -6043,7 +5869,7 @@ sec.subsections.forEach(sub => {
         function debounceSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveToLocal, 800); }
         function saveToLocal() {
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify({ scores, notes, meta, highlightedSections, sectionDates, savedAt: new Date().toISOString() }));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({ scores, notes, meta, savedAt: new Date().toISOString() }));
                 showToast('✓ تم الحفظ');
             } catch (e) { showToast('تعذر الحفظ'); }
         }
@@ -6054,8 +5880,6 @@ sec.subsections.forEach(sub => {
                     scores = d.scores || {};
                     notes = d.notes || {};
                     meta = { ...meta, ...(d.meta || {}) };
-                    highlightedSections = d.highlightedSections || {};
-                    sectionDates = d.sectionDates || {};
                     
                     updateMetaResult();
                     buildSidebarNav();
@@ -6076,7 +5900,7 @@ sec.subsections.forEach(sub => {
 
         function confirmClear() {
             openModal('مسح جميع البيانات', 'هل أنت متأكد؟ سيتم حذف جميع التقييمات والملاحظات.', () => {
-                scores = {}; notes = {}; meta = { hospital: '', hospitalName: '', region: '', type: '', governorate: 'الاسكندرية', inspectors: '', dates: '', result: '' }; highlightedSections = {}; sectionDates = {};
+                scores = {}; notes = {}; meta = { hospital: '', hospitalName: '', region: '', type: '', governorate: 'الاسكندرية', inspectors: '', dates: '', result: '' };
                 localStorage.removeItem(STORAGE_KEY);
                 buildSidebarNav(); updateProgress(); showHome(); showToast('تم مسح البيانات');
             });
@@ -6539,90 +6363,6 @@ async function searchReports(criteria) {
 }
 
 // Import Excel with conflict resolution
-// ── Read plain text value of a cell from sheet XML ──
-function _readCellText(sheetXml, cellRef) {
-    try {
-        const ci = sheetXml.indexOf('r="' + cellRef + '"');
-        if (ci === -1) return '';
-        const cs = sheetXml.lastIndexOf('<c ', ci);
-        if (cs === -1) return '';
-        const cellEnd = sheetXml.indexOf('</c>', cs);
-        if (cellEnd === -1) return '';
-        const cellXml = sheetXml.slice(cs, cellEnd + 4);
-        const inlineM = cellXml.match(/<t[^>]*>([\s\S]*?)<\/t>/);
-        if (inlineM) return inlineM[1].trim();
-        const valM = cellXml.match(/<v>([\s\S]*?)<\/v>/);
-        if (valM) return valM[1].trim();
-        return '';
-    } catch(e) { return ''; }
-}
-
-// ── Detect yellow D9:D51 in الاجمالي (sheet3) and mark 'imported' ──
-function _applyImportedHighlights(zipFiles) {
-    try {
-        const stylesXml = zipFiles['xl/styles.xml']
-            ? new TextDecoder('utf-8').decode(zipFiles['xl/styles.xml']) : null;
-        const sheet3Xml = zipFiles['xl/worksheets/sheet3.xml']
-            ? new TextDecoder('utf-8').decode(zipFiles['xl/worksheets/sheet3.xml']) : null;
-        if (!stylesXml || !sheet3Xml) { console.warn('[importHL] Missing styles or sheet3'); return; }
-
-        // Detect yellow style ids
-        const yellowIds = new Set();
-        const fillsSec = stylesXml.match(/<fills[^>]*>([\s\S]*?)<\/fills>/);
-        if (fillsSec) {
-            const yellowFillIdx = new Set();
-            [...fillsSec[1].matchAll(/<fill>([\s\S]*?)<\/fill>/g)].forEach((m, idx) => {
-                const fx = m[1];
-                const rgbM = fx.match(/fgColor[^>]+rgb="([^"]+)"/i);
-                if (rgbM) { const rgb = rgbM[1].toUpperCase(); if (rgb==='FFFF00'||rgb==='FFFFFF00') yellowFillIdx.add(idx); }
-                const idxM = fx.match(/fgColor[^>]+indexed="(\d+)"/i);
-                if (idxM && idxM[1]==='27') yellowFillIdx.add(idx);
-            });
-            const xfsSec = stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/);
-            if (xfsSec) {
-                [...xfsSec[1].matchAll(/<xf([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g)].forEach((m, si) => {
-                    const fM = m[1].match(/fillId="(\d+)"/);
-                    const aM = m[1].match(/applyFill="(\d+)"/);
-                    if (fM) { const apply = aM ? aM[1]!=='0' : true; if (apply && yellowFillIdx.has(parseInt(fM[1]))) yellowIds.add(si); }
-                });
-            }
-        }
-        console.log('[importHL PHC] yellowStyleIds:', [...yellowIds]);
-
-        // Build row→key map: D9=FORM_DATA[0] .. D51=FORM_DATA[42]
-        const rowToKey = {};
-        FORM_DATA.forEach((sec, idx) => { rowToKey[9 + idx] = sec.key; });
-
-        let found = 0;
-        for (let row = 9; row <= 51; row++) {
-            const secKey = rowToKey[row];
-            if (!secKey) continue;
-            // Read B column date (stored from previous export)
-            const bDate = _readCellText(sheet3Xml, 'B' + row);
-            if (bDate) {
-                sectionDates[secKey] = bDate;
-                if (highlightedSections[secKey] !== 'new') { highlightedSections[secKey] = 'imported'; found++; }
-            }
-            // Also check D for yellow fill
-            const ci = sheet3Xml.indexOf('r="D' + row + '"');
-            if (ci === -1) continue;
-            const cs = sheet3Xml.lastIndexOf('<c ', ci);
-            if (cs === -1) continue;
-            const ce = sheet3Xml.indexOf('>', cs);
-            const tag = sheet3Xml.slice(cs, ce + 1);
-            const sm = tag.match(/\bs="(\d+)"/);
-            if (sm && yellowIds.has(parseInt(sm[1]))) {
-                if (highlightedSections[secKey] !== 'new') {
-                    if (!bDate) found++;
-                    highlightedSections[secKey] = 'imported';
-                }
-                if (!bDate) { /* no date, keep whatever we have */ }
-            }
-        }
-        console.log('[importHL PHC] marked', found, 'sections as imported');
-    } catch(e) { console.warn('[importHL PHC error]', e); }
-}
-
 async function importExcelWithOptions(file, importMode = 'new') {
     const buf = new Uint8Array(await file.arrayBuffer());
     const zipFiles = await zipRead(buf);
@@ -6751,8 +6491,6 @@ async function importExcelWithOptions(file, importMode = 'new') {
         applyMeta();
         scores = importedScores;
         notes  = importedNotes;
-        highlightedSections = {};
-        _applyImportedHighlights(zipFiles);
         updateMetaResult();
         saveToLocal();
         buildSidebarNav();
@@ -6766,7 +6504,6 @@ async function importExcelWithOptions(file, importMode = 'new') {
         Object.keys(importedNotes).forEach(k => {
             if (!notes[k] && importedNotes[k]) notes[k] = importedNotes[k];
         });
-        _applyImportedHighlights(zipFiles);
         updateMetaResult();
         saveToLocal();
         buildSidebarNav();
