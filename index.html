@@ -5636,13 +5636,6 @@ sec.subsections.forEach(sub => {
                   ${meta.region && REGION_UNITS[meta.region] ? REGION_UNITS[meta.region].map(u => `<option value="${u}" ${meta.hospitalName === u ? 'selected' : ''}>${u}</option>`).join('') : ''}
                 </select>
               </div>
-              <div class="meta-field">
-                <label for="type">نوع الوحدة</label>
-      <select id="type" name="type" onchange="meta.type=this.value;debounceSave()">
-                  <option value="">-- اختر --</option>
-                  ${['وحدة صحية', 'مركز صحي', 'مركز طب أسرة'].map(t => `<option ${meta.type === t ? 'selected' : ''}>${t}</option>`).join('')}
-                </select>
-              </div>
              <div class="meta-field">
       <label for="inspectors">القائم بالتقييم</label>
       <input type="text" id="inspectors" name="inspectors" placeholder="اسم القائم بالمرور" value="${esc(meta.inspectors)}" oninput="meta.inspectors=this.value;debounceSave()">
