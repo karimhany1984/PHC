@@ -5114,87 +5114,7 @@ self.onmessage = async function(e) {
         sheet3 = _workerPatchAllCells(sheet3, patches3);
 
         // Apply highlight fills to sheet3 D9:D51
-        if (highlightedSections && formDataKeys && files['xl/styles.xml']) {
-            try {
-                let stylesXml = new TextDecoder('utf-8').decode(files['xl/styles.xml']);
-                const newKeys      = formDataKeys.filter(k => highlightedSections[k]==='new'||highlightedSections[k]===true);
-                const importedKeys = formDataKeys.filter(k => highlightedSections[k]==='imported');
-
-                let yellowFillId = -1, yellowStyleIdx = -1;
-                let whiteFillId  = -1, whiteStyleIdx  = -1;
-
-                const getFillsCnt = (xml) => { const m=xml.match(/<fills count="(\d+)"/); return m?parseInt(m[1]):-1; };
-                const getXfsCnt   = (xml) => { const m=xml.match(/<cellXfs count="(\d+)"/); return m?parseInt(m[1]):-1; };
-
-                if (newKeys.length > 0) {
-                    let fc = getFillsCnt(stylesXml);
-                    if (fc>=0) {
-                        yellowFillId = fc;
-                        stylesXml = stylesXml.replace('</fills>','<fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill></fills>');
-                        stylesXml = stylesXml.replace('<fills count="'+fc+'"','<fills count="'+(fc+1)+'"');
-                        let xc = getXfsCnt(stylesXml);
-                        if (xc>=0) {
-                            yellowStyleIdx = xc;
-                            stylesXml = stylesXml.replace('</cellXfs>','<xf numFmtId="0" fontId="0" fillId="'+yellowFillId+'" borderId="0" xfId="0" applyFill="1"/></cellXfs>');
-                            stylesXml = stylesXml.replace('<cellXfs count="'+xc+'"','<cellXfs count="'+(xc+1)+'"');
-                        }
-                    }
-                }
-                if (importedKeys.length > 0) {
-                    let fc = getFillsCnt(stylesXml);
-                    if (fc>=0) {
-                        whiteFillId = fc;
-                        stylesXml = stylesXml.replace('</fills>','<fill><patternFill patternType="none"/></fill></fills>');
-                        stylesXml = stylesXml.replace('<fills count="'+fc+'"','<fills count="'+(fc+1)+'"');
-                        let xc = getXfsCnt(stylesXml);
-                        if (xc>=0) {
-                            whiteStyleIdx = xc;
-                            stylesXml = stylesXml.replace('</cellXfs>','<xf numFmtId="0" fontId="0" fillId="'+whiteFillId+'" borderId="0" xfId="0" applyFill="1"/></cellXfs>');
-                            stylesXml = stylesXml.replace('<cellXfs count="'+xc+'"','<cellXfs count="'+(xc+1)+'"');
-                        }
-                    }
-                }
-                files['xl/styles.xml'] = new TextEncoder().encode(stylesXml);
-
-                const applyDStyle = (xml, row, si) => {
-                    const ref = 'D'+row;
-                    const ep = new RegExp('(<c r="'+ref+'")(\\s[^>]*)?(/>|>)');
-                    const m = xml.match(ep);
-                    if (m) {
-                        let attrs = (m[2]||'').replace(/\s*s="\d+"/,'');
-                        xml = xml.replace(ep, '<c r="'+ref+'"'+attrs+' s="'+si+'"'+m[3]);
-                    } else {
-                        const rp = new RegExp('(<row r="'+row+'"[^>]*>)([\\s\\S]*?)(</row>)');
-                        const rm = xml.match(rp);
-                        if (rm) xml = xml.replace(rp, rm[1]+rm[2]+'<c r="'+ref+'" s="'+si+'"/>'+rm[3]);
-                    }
-                    return xml;
-                };
-                const patchBDate = (xml, row, txt) => {
-                    if (!txt) return xml;
-                    const ref = 'B'+row;
-                    xml = xml.replace(new RegExp('<c r="'+ref+'"[^>]*(?:/>|>[\\s\\S]*?</c>)'), '');
-                    const rp = new RegExp('(<row r="'+row+'"[^>]*>)([\\s\\S]*?)(</row>)');
-                    const rm = xml.match(rp);
-                    if (rm) xml = xml.replace(rp, rm[1]+'<c r="'+ref+'" t="inlineStr"><is><t>'+txt+'</t></is></c>'+rm[2]+rm[3]);
-                    return xml;
-                };
-
-                formDataKeys.forEach((key, idx) => {
-                    // D9-D42=idx 0-33, D43=header(skip), D44-D52=idx 34-42
-                    const dRow = idx <= 33 ? 9 + idx : 10 + idx;
-                    const hl = highlightedSections[key];
-                    if (hl==='new'||hl===true) {
-                        if (yellowStyleIdx>=0) sheet3 = applyDStyle(sheet3, dRow, yellowStyleIdx);
-                        const dt = sectionDates[key]||meta.dates;
-                        if (dt) sheet3 = patchBDate(sheet3, dRow, dt);
-                    } else if (hl==='imported') {
-                        if (whiteStyleIdx>=0) sheet3 = applyDStyle(sheet3, dRow, whiteStyleIdx);
-                        if (sectionDates[key]) sheet3 = patchBDate(sheet3, dRow, sectionDates[key]);
-                    }
-                });
-            } catch(hlErr) { /* highlight optional */ }
-        }
+        // (highlight is now applied in main thread after worker finishes)
 
         files['xl/worksheets/sheet1.xml'] = new TextEncoder().encode(sheet1);
         files['xl/worksheets/sheet2.xml'] = new TextEncoder().encode(sheet2);
@@ -5228,21 +5148,128 @@ self.onmessage = async function(e) {
                 const templateCopy = templateBuf.slice().buffer;
 
                 await new Promise((resolve, reject) => {
-                    worker.onmessage = (e) => {
+                    worker.onmessage = async (e) => {
                         const { status, msg, result } = e.data;
                         if (status === 'progress') {
                             showToast(msg);
                         } else if (status === 'done') {
                             worker.terminate();
-                            const blob = new Blob([result], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-                            const url2 = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            const fname = (meta.region ? meta.region + '_' : '') + (meta.hospitalName || 'وحدة') + '_' + (meta.dates || new Date().toISOString().slice(0, 10)) + '.xlsx';
-                            a.href = url2; a.download = fname;
-                            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                            setTimeout(() => URL.revokeObjectURL(url2), 10000);
-                            showToast('✓ تم تصدير الملف بنجاح');
-                            resolve();
+                            try {
+                                // ── Apply highlight fills in main thread (more reliable than worker) ──
+                                let finalBuf = result;
+                                const hlKeys = Object.keys(highlightedSections).filter(k => highlightedSections[k]);
+                                if (hlKeys.length > 0) {
+                                    try {
+                                        showToast('تطبيق التمييزات...');
+                                        const files = await _workerZipRead(new Uint8Array(finalBuf));
+                                        let stylesXml = new TextDecoder('utf-8').decode(files['xl/styles.xml']);
+                                        let sheet3    = new TextDecoder('utf-8').decode(files['xl/worksheets/sheet3.xml']);
+
+                                        // Template already has fills: index 10=FFFFFF99(yellow), 16=D2EAF1(blue)
+                                        // Clone D9's style (s=53) with different fill to preserve borders/font
+                                        const newKeys      = hlKeys.filter(k => highlightedSections[k]==='new'||highlightedSections[k]===true);
+                                        const importedKeys = hlKeys.filter(k => highlightedSections[k]==='imported');
+
+                                        // Find style 53 attributes to clone
+                                        const xfsSec  = stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/);
+                                        const xfList  = xfsSec ? [...xfsSec[1].matchAll(/<xf([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g)] : [];
+                                        const style53 = xfList[53] ? xfList[53][1] : ' numFmtId="0" fontId="10" fillId="14" borderId="91" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"';
+
+                                        // Build new styles: clone style53 but change fillId
+                                        const xfsCntM = stylesXml.match(/<cellXfs count="(\d+)"/);
+                                        let xfsCnt = xfsCntM ? parseInt(xfsCntM[1]) : -1;
+
+                                        let yellowStyleIdx = -1, blueStyleIdx = -1;
+                                        if (xfsCnt >= 0) {
+                                            const yellowAttrs = style53.replace(/fillId="\d+"/, 'fillId="10"'); // FFFFFF99
+                                            const blueAttrs   = style53.replace(/fillId="\d+"/, 'fillId="16"'); // D2EAF1
+                                            let addCount = 0;
+                                            let newXfs = '';
+                                            if (newKeys.length > 0)      { yellowStyleIdx = xfsCnt + addCount; newXfs += `<xf${yellowAttrs}/>`; addCount++; }
+                                            if (importedKeys.length > 0) { blueStyleIdx   = xfsCnt + addCount; newXfs += `<xf${blueAttrs}/>`; addCount++; }
+                                            if (newXfs) {
+                                                stylesXml = stylesXml.replace('</cellXfs>', newXfs + '</cellXfs>');
+                                                stylesXml = stylesXml.replace(/<cellXfs count="\d+"/, `<cellXfs count="${xfsCnt + addCount}"`);
+                                            }
+                                            files['xl/styles.xml'] = new TextEncoder().encode(stylesXml);
+                                        }
+
+                                        // Helper: set s attribute on D{row} cell
+                                        const setDStyle = (xml, row, si) => {
+                                            const ref = 'D' + row;
+                                            // Find cell tag opening
+                                            const ci = xml.indexOf('r="' + ref + '"');
+                                            if (ci < 0) return xml;
+                                            const cs = xml.lastIndexOf('<c ', ci);
+                                            if (cs < 0) return xml;
+                                            const tagEnd = xml.indexOf('>', cs);
+                                            if (tagEnd < 0) return xml;
+                                            const oldTag = xml.slice(cs, tagEnd + 1);
+                                            const newTag = oldTag.includes('s="')
+                                                ? oldTag.replace(/s="\d+"/, 's="' + si + '"')
+                                                : oldTag.replace('>', ' s="' + si + '">').replace('/>', ' s="' + si + '"/>');
+                                            return xml.slice(0, cs) + newTag + xml.slice(tagEnd + 1);
+                                        };
+
+                                        // Helper: write date to B{row} as inline string
+                                        const setBDate = (xml, row, txt) => {
+                                            if (!txt) return xml;
+                                            const ref = 'B' + row;
+                                            // Remove existing B cell (self-closing or full)
+                                            const bci = xml.indexOf('r="' + ref + '"');
+                                            if (bci >= 0) {
+                                                const bcs = xml.lastIndexOf('<c ', bci);
+                                                if (bcs >= 0) {
+                                                    const bte = xml.indexOf('>', bcs);
+                                                    if (bte >= 0) {
+                                                        if (xml[bte - 1] === '/') {
+                                                            xml = xml.slice(0, bcs) + xml.slice(bte + 1);
+                                                        } else {
+                                                            const bce = xml.indexOf('</c>', bte);
+                                                            if (bce >= 0) xml = xml.slice(0, bcs) + xml.slice(bce + 4);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Insert new B cell at start of row
+                                            const ri = xml.indexOf('<row r="' + row + '"');
+                                            if (ri < 0) return xml;
+                                            const re2 = xml.indexOf('>', ri);
+                                            if (re2 < 0) return xml;
+                                            const newCell = '<c r="' + ref + '" t="inlineStr"><is><t>' + txt + '</t></is></c>';
+                                            return xml.slice(0, re2 + 1) + newCell + xml.slice(re2 + 1);
+                                        };
+
+                                        // Apply to each section: D9-D42=idx 0-33, skip D43, D44-D52=idx 34-42
+                                        const formDataKeys = FORM_DATA.map(s => s.key);
+                                        formDataKeys.forEach((key, idx) => {
+                                            const dRow = idx <= 33 ? 9 + idx : 10 + idx;
+                                            const hl   = highlightedSections[key];
+                                            if ((hl === 'new' || hl === true) && yellowStyleIdx >= 0) {
+                                                sheet3 = setDStyle(sheet3, dRow, yellowStyleIdx);
+                                                sheet3 = setBDate(sheet3, dRow, sectionDates[key] || meta.dates || '');
+                                            } else if (hl === 'imported' && blueStyleIdx >= 0) {
+                                                sheet3 = setDStyle(sheet3, dRow, blueStyleIdx);
+                                                if (sectionDates[key]) sheet3 = setBDate(sheet3, dRow, sectionDates[key]);
+                                            }
+                                        });
+
+                                        files['xl/worksheets/sheet3.xml'] = new TextEncoder().encode(sheet3);
+                                        const modified = await _workerZipWrite(files);
+                                        finalBuf = modified.buffer;
+                                    } catch(hlErr) { console.error('[Highlight]', hlErr); }
+                                }
+                                // Download
+                                const blob = new Blob([finalBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                                const url2 = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                const fname = (meta.region ? meta.region + '_' : '') + (meta.hospitalName || 'وحدة') + '_' + (meta.dates || new Date().toISOString().slice(0, 10)) + '.xlsx';
+                                a.href = url2; a.download = fname;
+                                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                                setTimeout(() => URL.revokeObjectURL(url2), 10000);
+                                showToast('✓ تم تصدير الملف بنجاح');
+                                resolve();
+                            } catch(finErr) { reject(finErr); }
                         } else if (status === 'error') {
                             worker.terminate();
                             reject(new Error(msg));
