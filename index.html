@@ -5165,8 +5165,8 @@ self.onmessage = async function(e) {
                                         let stylesXml = new TextDecoder('utf-8').decode(files['xl/styles.xml']);
                                         let sheet3    = new TextDecoder('utf-8').decode(files['xl/worksheets/sheet3.xml']);
 
-                                        // Template already has fills: index 10=FFFFFF99(yellow), 16=D2EAF1(blue)
-                                        // Clone D9's style (s=53) with different fill to preserve borders/font
+                                        // Template has fills: index 0=none(white), 10=FFFFFF99(yellow), 16=D2EAF1(blue)
+                                        // Clone D9's style (s=53): preserve font+border, only change fillId
                                         const newKeys      = hlKeys.filter(k => highlightedSections[k]==='new'||highlightedSections[k]===true);
                                         const importedKeys = hlKeys.filter(k => highlightedSections[k]==='imported');
 
@@ -5175,18 +5175,18 @@ self.onmessage = async function(e) {
                                         const xfList  = xfsSec ? [...xfsSec[1].matchAll(/<xf([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g)] : [];
                                         const style53 = xfList[53] ? xfList[53][1] : ' numFmtId="0" fontId="10" fillId="14" borderId="91" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"';
 
-                                        // Build new styles: clone style53 but change fillId
                                         const xfsCntM = stylesXml.match(/<cellXfs count="(\d+)"/);
                                         let xfsCnt = xfsCntM ? parseInt(xfsCntM[1]) : -1;
 
-                                        let yellowStyleIdx = -1, blueStyleIdx = -1;
+                                        let yellowStyleIdx = -1, whiteStyleIdx = -1;
                                         if (xfsCnt >= 0) {
-                                            const yellowAttrs = style53.replace(/fillId="\d+"/, 'fillId="10"'); // FFFFFF99
-                                            const blueAttrs   = style53.replace(/fillId="\d+"/, 'fillId="16"'); // D2EAF1
+                                            // yellow: fillId=10 (FFFFFF99), white: fillId=0 (no fill)
+                                            const yellowAttrs = style53.replace(/fillId="\d+"/, 'fillId="10"');
+                                            const whiteAttrs  = style53.replace(/fillId="\d+"/, 'fillId="0"');
                                             let addCount = 0;
                                             let newXfs = '';
                                             if (newKeys.length > 0)      { yellowStyleIdx = xfsCnt + addCount; newXfs += `<xf${yellowAttrs}/>`; addCount++; }
-                                            if (importedKeys.length > 0) { blueStyleIdx   = xfsCnt + addCount; newXfs += `<xf${blueAttrs}/>`; addCount++; }
+                                            if (importedKeys.length > 0) { whiteStyleIdx   = xfsCnt + addCount; newXfs += `<xf${whiteAttrs}/>`; addCount++; }
                                             if (newXfs) {
                                                 stylesXml = stylesXml.replace('</cellXfs>', newXfs + '</cellXfs>');
                                                 stylesXml = stylesXml.replace(/<cellXfs count="\d+"/, `<cellXfs count="${xfsCnt + addCount}"`);
@@ -5194,10 +5194,9 @@ self.onmessage = async function(e) {
                                             files['xl/styles.xml'] = new TextEncoder().encode(stylesXml);
                                         }
 
-                                        // Helper: set s attribute on D{row} cell
+                                        // Helper: update s attr on D{row} cell opening tag only
                                         const setDStyle = (xml, row, si) => {
                                             const ref = 'D' + row;
-                                            // Find cell tag opening
                                             const ci = xml.indexOf('r="' + ref + '"');
                                             if (ci < 0) return xml;
                                             const cs = xml.lastIndexOf('<c ', ci);
@@ -5205,39 +5204,43 @@ self.onmessage = async function(e) {
                                             const tagEnd = xml.indexOf('>', cs);
                                             if (tagEnd < 0) return xml;
                                             const oldTag = xml.slice(cs, tagEnd + 1);
-                                            const newTag = oldTag.includes('s="')
-                                                ? oldTag.replace(/s="\d+"/, 's="' + si + '"')
-                                                : oldTag.replace('>', ' s="' + si + '">').replace('/>', ' s="' + si + '"/>');
+                                            const newTag = oldTag.includes(' s="')
+                                                ? oldTag.replace(/ s="\d+"/, ' s="' + si + '"')
+                                                : oldTag.replace('>', ' s="' + si + '">').replace(' s="' + si + '"/>', ' s="' + si + '"/>');
                                             return xml.slice(0, cs) + newTag + xml.slice(tagEnd + 1);
                                         };
 
-                                        // Helper: write date to B{row} as inline string
+                                        // Helper: safely update B{row} cell value in-place (no remove+reinsert)
                                         const setBDate = (xml, row, txt) => {
                                             if (!txt) return xml;
                                             const ref = 'B' + row;
-                                            // Remove existing B cell (self-closing or full)
                                             const bci = xml.indexOf('r="' + ref + '"');
                                             if (bci >= 0) {
+                                                // Cell exists — find its bounds
                                                 const bcs = xml.lastIndexOf('<c ', bci);
-                                                if (bcs >= 0) {
-                                                    const bte = xml.indexOf('>', bcs);
-                                                    if (bte >= 0) {
-                                                        if (xml[bte - 1] === '/') {
-                                                            xml = xml.slice(0, bcs) + xml.slice(bte + 1);
-                                                        } else {
-                                                            const bce = xml.indexOf('</c>', bte);
-                                                            if (bce >= 0) xml = xml.slice(0, bcs) + xml.slice(bce + 4);
-                                                        }
-                                                    }
+                                                if (bcs < 0) return xml;
+                                                const bte = xml.indexOf('>', bcs);
+                                                if (bte < 0) return xml;
+                                                if (xml[bte - 1] === '/') {
+                                                    // Self-closing: replace entirely with inline string
+                                                    const newCell = '<c r="' + ref + '" s="47" t="inlineStr"><is><t>' + txt + '</t></is></c>';
+                                                    return xml.slice(0, bcs) + newCell + xml.slice(bte + 1);
+                                                } else {
+                                                    // Has content: replace up to </c>
+                                                    const bce = xml.indexOf('</c>', bte);
+                                                    if (bce < 0) return xml;
+                                                    const newCell = '<c r="' + ref + '" s="47" t="inlineStr"><is><t>' + txt + '</t></is></c>';
+                                                    return xml.slice(0, bcs) + newCell + xml.slice(bce + 4);
                                                 }
+                                            } else {
+                                                // Cell doesn't exist — insert after row opening tag, before first cell
+                                                const ri = xml.indexOf('<row r="' + row + '"');
+                                                if (ri < 0) return xml;
+                                                const rte = xml.indexOf('>', ri);
+                                                if (rte < 0) return xml;
+                                                const newCell = '<c r="' + ref + '" s="47" t="inlineStr"><is><t>' + txt + '</t></is></c>';
+                                                return xml.slice(0, rte + 1) + newCell + xml.slice(rte + 1);
                                             }
-                                            // Insert new B cell at start of row
-                                            const ri = xml.indexOf('<row r="' + row + '"');
-                                            if (ri < 0) return xml;
-                                            const re2 = xml.indexOf('>', ri);
-                                            if (re2 < 0) return xml;
-                                            const newCell = '<c r="' + ref + '" t="inlineStr"><is><t>' + txt + '</t></is></c>';
-                                            return xml.slice(0, re2 + 1) + newCell + xml.slice(re2 + 1);
                                         };
 
                                         // Apply to each section: D9-D42=idx 0-33, skip D43, D44-D52=idx 34-42
@@ -5246,10 +5249,12 @@ self.onmessage = async function(e) {
                                             const dRow = idx <= 33 ? 9 + idx : 10 + idx;
                                             const hl   = highlightedSections[key];
                                             if ((hl === 'new' || hl === true) && yellowStyleIdx >= 0) {
+                                                // 'new': yellow fill + CURRENT report date (not stored sectionDate)
                                                 sheet3 = setDStyle(sheet3, dRow, yellowStyleIdx);
-                                                sheet3 = setBDate(sheet3, dRow, sectionDates[key] || meta.dates || '');
-                                            } else if (hl === 'imported' && blueStyleIdx >= 0) {
-                                                sheet3 = setDStyle(sheet3, dRow, blueStyleIdx);
+                                                sheet3 = setBDate(sheet3, dRow, meta.dates || '');
+                                            } else if (hl === 'imported' && whiteStyleIdx >= 0) {
+                                                // 'imported': white fill + stored historical date
+                                                sheet3 = setDStyle(sheet3, dRow, whiteStyleIdx);
                                                 if (sectionDates[key]) sheet3 = setBDate(sheet3, dRow, sectionDates[key]);
                                             }
                                         });
