@@ -6363,6 +6363,10 @@ async function saveToDatabase(recordName = null) {
         // Scores and notes
         scores: { ...scores },
         notes: { ...notes },
+
+        // Section edit dates and highlights
+        sectionDates: { ...sectionDates },
+        highlightedSections: { ...highlightedSections },
         
         // Calculated totals
         totalEarned: 0,
@@ -6420,6 +6424,8 @@ async function loadFromDatabase(id) {
                 meta.dates = data.inspectionDate;
                 scores = data.scores || {};
                 notes = data.notes || {};
+                sectionDates = data.sectionDates || {};
+                highlightedSections = data.highlightedSections || {};
                 
                 updateMetaResult();
                 buildSidebarNav();
@@ -6455,6 +6461,8 @@ async function updateInDatabase(id) {
         inspectionDate: meta.dates || '',
         scores: { ...scores },
         notes: { ...notes },
+        sectionDates: { ...sectionDates },
+        highlightedSections: { ...highlightedSections },
         totalEarned: grandEarned,
         totalMax: grandMax,
         percentage: getGrandTotalPct(),
@@ -6504,7 +6512,8 @@ async function getAllReports(limit = 50, offset = 0) {
                         percentage: cursor.value.percentage,
                         savedAt: cursor.value.savedAt,
                         governorate: cursor.value.governorate,
-                        scores: cursor.value.scores || {}
+                        scores: cursor.value.scores || {},
+                        sectionDates: cursor.value.sectionDates || {}
                     });
                 }
                 count++;
@@ -7019,6 +7028,25 @@ async function renderReportsList(filters = { region: '', hospitalName: '', year:
         const fillColor = percentage >= 80 ? 'var(--green)' : percentage >= 50 ? 'var(--orange)' : percentage > 0 ? 'var(--red)' : 'var(--border)';
         const dateObj = new Date(report.savedAt);
         const savedDate = dateObj.toLocaleDateString('ar-EG');
+
+        // Build section edit dates badge
+        const secDates = report.sectionDates || {};
+        const editedEntries = Object.entries(secDates).filter(([, d]) => !!d);
+        let sectionDatesHtml = '';
+        if (editedEntries.length > 0) {
+            // Group by date value
+            const byDate = {};
+            editedEntries.forEach(([key, date]) => {
+                const sec = FORM_DATA.find(s => s.key === key);
+                const title = sec ? sec.title : key;
+                if (!byDate[date]) byDate[date] = [];
+                byDate[date].push(title);
+            });
+            const badgeItems = Object.entries(byDate).map(([date, titles]) =>
+                `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:2px 7px;font-size:10px;font-weight:600;margin:2px;">📅 ${escapeHtml(date)} · ${titles.map(escapeHtml).join('، ')}</span>`
+            ).join('');
+            sectionDatesHtml = `<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:3px;">${badgeItems}</div>`;
+        }
         
         reportsHtml += `
             <div class="sum-card" style="padding:16px;">
@@ -7031,6 +7059,7 @@ async function renderReportsList(filters = { region: '', hospitalName: '', year:
                         <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">
                             💾 حفظ: ${savedDate}
                         </div>
+                        ${sectionDatesHtml}
                     </div>
                     <div style="text-align:center; min-width:80px;">
                         <div style="font-size:22px; font-weight:900; color:var(--primary);">${report.totalEarned || 0}</div>
